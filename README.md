@@ -49,14 +49,14 @@ bash claude-code-new-functionality-check/skills/claude-code-new-functionality-ch
 ```
 
 The first run is a dry run: it lists what it would copy and changes nothing. The second run does the following:
-- copies the skill, its two agents, the weekly reminder hook and the test suites into `~/.claude` (or `$CLAUDE_CONFIG_DIR`);
+- copies the skill, its two agents, the weekly reminder hook and the test suites into `~/.claude` (or `$CLAUDE_CONFIG_DIR`, which also needs the few settings in wiring.md's "Tunables");
 - adds the reminder to `~/.claude/settings.json`;
 - creates the ledger folder `~/.claude/claude-code-new-functionality-check/` with a denylist template.
 
 It never deletes anything. A file it replaces is backed up first, under `~/.claude/backups/claude-code-new-functionality-check-install/`. Each flag is optional: leave out `--register-reminder` to run sweeps only by hand, and `--opt-in` on machines that should never sweep.
 
 Then:
-1. **Start a new Claude Code session.** Agents are loaded at session start.
+1. **Check that Claude Code sees the two agents.** Run `/agents`. If they are not listed yet, start a new session; recent versions pick up new agent files on their own.
 2. **Add your private terms to `~/.claude/claude-code-new-functionality-check/denylist.txt`**, one per line: client and employer names, project code names, private repository names, people. Web research stays blocked until you do.
 3. Optionally, beside the ledger:
    - `house-constraints.md`: rules of your own config that a proposal must respect;
@@ -75,9 +75,9 @@ Every manual step is in [wiring.md](https://github.com/shane-staret/claude-code-
 
 On the next prompt the hook prints a **never-run** notice, and Claude asks before starting anything.
 - **Full backfill**, `/claude-code-new-functionality-check backfill`, reads every weekly digest and the whole changelog. On the author's machine that took 13 subagents and about 2.3 million subagent tokens.
-- **Short backfill**, `/claude-code-new-functionality-check backfill since 2026-w33` (any week slug), covers only what shipped after that week. It costs a fraction of a full backfill and is the sensible start.
+- **Short backfill**, `/claude-code-new-functionality-check backfill since 2026-w33`, covers only what shipped after that week. It costs a fraction of a full backfill and is the sensible start. A week slug is the ISO year and week. The digest index at <https://code.claude.com/docs/en/whats-new> shows the weeks, and the helper lists them after it has fetched once (`fetch`, then `digests`, both subcommands of `claude_code_new_functionality_check.sh`).
 
-After that, the hook reminds you weekly. An incremental sweep costs a few hundred thousand tokens, and close to nothing when upstream has published nothing new. It runs inside your interactive Claude Code session, using subagents; it never starts a separate headless Claude process.
+After that, the hook reminds you weekly. An incremental sweep costs a few hundred thousand tokens, and less when upstream has published nothing new (the weekly research lane still runs). It runs inside your interactive Claude Code session, using subagents; it never starts a separate headless Claude process. On a Claude subscription those tokens count against your plan's usage limits; with API-key billing they are charged at your model's token prices.
 
 ## Using it
 
@@ -89,7 +89,7 @@ After that, the hook reminds you weekly. An incremental sweep costs a few hundre
 | `/claude-code-new-functionality-check present` | shows the open proposals again |
 | `accept RW-0007 RW-0012` · `decline RW-0009: <why>` · `defer RW-0011 until <when>` | records your decision in the ledger |
 | `walk me through hooks` | goes through the open proposals for one target, one at a time |
-| `implement RW-0007` | starts building an accepted proposal, as its own task |
+| `implement RW-0007` | starts building an accepted proposal, as its own task. When it is done, say `RW-0007 applied: <what changed and how it was checked>` and the skill records it |
 
 Proposals marked **sensitive** (a new hook command, a loosened permission, a plugin install, anything that runs unattended) are accepted only after a walk-through, never by bare id. Ids carry the `RW-` prefix because the skill was renamed from release-watch, and ids are never renamed.
 
@@ -123,8 +123,8 @@ bash claude-code-new-functionality-check/hooks/tests/test-claude-code-new-functi
 
 ## Updating and uninstalling
 
-- **Update:** run `git pull` in the clone, then rerun `install.sh --yes`. Changed files are backed up before they are replaced. Your ledger and per-machine files live outside the skill folder, so an update never touches them.
-- **Uninstall:** remove the hook's entry from `settings.json`, then move the skill folder, the two agents and the hook out of `~/.claude`. The ledger folder holds your decisions, so keep it if you may come back. [wiring.md](https://github.com/shane-staret/claude-code-new-functionality-check/blob/main/skills/claude-code-new-functionality-check/resources/wiring.md#uninstalling) has the details.
+- **Update:** run `git pull` in the clone, then rerun `bash claude-code-new-functionality-check/skills/claude-code-new-functionality-check/install.sh --yes`. Changed files are backed up before they are replaced. Your ledger and per-machine files live outside the skill folder, so an update never touches them.
+- **Uninstall:** remove the hook's entry from `settings.json`, then move the skill folder, the two agents, the hook and its four test suites out of `~/.claude`. The ledger folder holds your decisions, so keep it if you may come back. [wiring.md](https://github.com/shane-staret/claude-code-new-functionality-check/blob/main/skills/claude-code-new-functionality-check/resources/wiring.md#uninstalling) has the details.
 
 ## License
 

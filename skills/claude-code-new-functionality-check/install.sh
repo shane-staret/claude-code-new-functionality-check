@@ -317,7 +317,7 @@ opt_in_step() {
 
 next_steps() {
     say "Next:"
-    say "  - start a new Claude Code session: agents load at session start"
+    say "  - run /agents in Claude Code; if the two new agents are not listed yet, start a new session"
     [ "$OPT_IN" = yes ] && say "  - add your private terms to the denylist before the first sweep"
     say "  - check the wiring: bash \"$TARGET/hooks/$REMINDER\" --status"
     say "  - run the tests: bash \"$TARGET/hooks/tests/test-$NAME-package.sh\" (and -helper, -reminder, -install)"

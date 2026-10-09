@@ -33,7 +33,7 @@ The ledger lives in `${CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR:-~/.claude/claude-code
 | plugin marketplace | snapshot 2026-09-19 | 2026-09-19T09:00:00Z | 0 |
 | tracked issues | checked 2026-09-19 | 2026-09-19T09:00:00Z | 0 |
 | research: official long-form | posts through 2026-09-17 | 2026-09-19T09:00:00Z | 0 |
-| research: rotating theme | theme 3 (week 38) | 2026-09-19T09:00:00Z | 0 |
+| research: rotating theme | theme 6 (week 38: 38 mod 8 = 6) | 2026-09-19T09:00:00Z | 0 |
 
 ## Proposal index
 
@@ -43,7 +43,7 @@ The ledger lives in `${CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR:-~/.claude/claude-code
 
 ## Run log
 
-- 2026-09-19T09:00:00Z backfill · sources 32/32 ok · evaluators 9/9 valid · quotes 61/64 verified · research 4 lanes 29/32 searches · +25 proposals +9 risk-watch +14 leads · backlog 31 · failed lanes: none
+- 2026-09-19T09:00:00Z backfill · sources 32/32 ok · evaluators 9/9 valid · quotes 100/101 verified · research 4 lanes 31/32 searches · +24 proposals +15 risk-watch +34 leads · backlog 22 · failed lanes: none
 ```
 
 Index rows and detail blocks are written by `claude_code_new_functionality_check.sh ledger-add <curated.json>`, never typed by hand: it assigns the next ids, keeps every cell pipe-free, marks risk-watch rows with `[RISK]` in the title, and skips a `feature_key` + target that is already indexed. A status change is written by `claude_code_new_functionality_check.sh ledger-status <RW-id> <status> [<detail>]`, which updates the index row (status + decided) and the block's Status and History lines together or not at all. Coverage rows and run-log lines are edited by hand.

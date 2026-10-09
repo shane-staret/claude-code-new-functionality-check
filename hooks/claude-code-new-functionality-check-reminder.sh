@@ -359,7 +359,7 @@ else
     if [ "$NOTICES_SINCE_LAST_RUN" -ge "$ESCALATE_AFTER_NOTICES" ]; then
         _escalation=" This is reminder $NOTICES_SINCE_LAST_RUN since the last sweep: either run it this session or tell the user plainly that it keeps being deferred."
     fi
-    echo "NEW-FUNCTIONALITY-CHECK: the last Claude Code release sweep on this machine was $AGE_TEXT (covered: ${COVERED:-unknown}$_cli). Finish the user's current request first, then run /claude-code-new-functionality-check at a natural pause (research runs in read-only subagents; it is a cheap no-op when nothing is new) and present any new proposals, or tell the user you are deferring it.$_escalation"
+    echo "NEW-FUNCTIONALITY-CHECK: the last Claude Code release sweep on this machine was $AGE_TEXT (covered: ${COVERED:-unknown}$_cli). Finish the user's current request first, then run /claude-code-new-functionality-check at a natural pause (research runs in read-only subagents; a sweep is short when nothing is new, though its research lane still runs) and present any new proposals, or tell the user you are deferring it.$_escalation"
 fi
 
 # Hook mode never fails the prompt over an unwritable state file; the only cost

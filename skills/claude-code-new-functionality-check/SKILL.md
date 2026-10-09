@@ -27,7 +27,7 @@ If the user's `CLAUDE.md` carries a release-currency rule, this skill is its pro
 | `resources/example-report.md` | seeing what a finished sweep's output and its recommendations look like (a real incremental sweep) |
 | `resources/references.md` | asking why a rule exists |
 
-Helper: `bash ~/.claude/skills/claude-code-new-functionality-check/claude_code_new_functionality_check.sh <subcommand>` (`--help` lists them). Exit 2 = a source failed; exit 3 = a source's FORMAT drifted — never report either as "nothing new". Ledger home: `${CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR:-~/.claude/claude-code-new-functionality-check}/` — per-machine on purpose, and its existence is what opts a machine in.
+Helper: `bash ~/.claude/skills/claude-code-new-functionality-check/claude_code_new_functionality_check.sh <subcommand>` (`--help` lists them). Paths written `cache/…` below are inside `${NEW_FUNCTIONALITY_CHECK_CACHE_DIR:-~/.claude/tmp/claude-code-new-functionality-check/cache}/`; the helper never changes directory, so write them out in full (`> ~/.claude/tmp/claude-code-new-functionality-check/cache/inventory.md`, never a bare `cache/`). Exit 2 = a source failed; exit 3 = a source's FORMAT drifted — never report either as "nothing new". Ledger home: `${CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR:-~/.claude/claude-code-new-functionality-check}/` — per-machine on purpose, and its existence is what opts a machine in.
 
 ## Modes
 
@@ -98,7 +98,7 @@ Full detail: <ledger dir>/proposals.md
 
 ## Checklist
 
-**Required by the governing standards:**
+**Required by the author's engineering standards (each item stands on its own):**
 - [ ] No hook, agent or skill of this package starts a headless Claude session; deferred work is a notice the live session acts on.
 - [ ] Every network call went through the helper's `http_get`; the per-source table was read; failures were surfaced with attempts and cause; coverage advanced only for sources that succeeded (Retry & Resilience: CLASSIFY / WRAP / SURFACE / ACCOUNT).
 - [ ] Hook, helper or installer changes ship with their suite updated, and the package's suites (`hooks/tests/test-claude-code-new-functionality-check-*.sh`) are green.

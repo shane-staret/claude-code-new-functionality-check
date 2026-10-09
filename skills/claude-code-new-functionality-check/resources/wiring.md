@@ -14,7 +14,7 @@ Paths are written as `~/.claude`. For a different config folder, see "Tunables".
 | `hooks/claude-code-new-functionality-check-reminder.sh` | `~/.claude/hooks/` | the weekly notice, and the single owner of the sweep state (`--status`, `--write-state`) |
 | `hooks/tests/test-claude-code-new-functionality-check-*.sh` | `~/.claude/hooks/tests/` (optional) | the four offline suites |
 
-The helper, the hook and the installer must be executable. Requirements: bash 3.2 or later, curl and python3; jq only for registering the hook. A running session picks up new skills and settings, but **agents load at session start**, so start a new Claude Code session after copying them.
+The helper, the hook and the installer must be executable. Requirements: bash 3.2 or later, curl and python3; jq only for registering the hook. A running session picks up new skills and settings. Recent versions pick up new agent files too: run `/agents`, and if the two agents are not listed, start a new Claude Code session.
 
 ## The settings entry (the weekly notice)
 
@@ -77,7 +77,19 @@ These live beside the ledger, never in the skill folder, so updating the skill n
 | `tracked-issues.md` | upstream issues your config works around, in the table shape of `resources/tracked-issues.md` | the helper (`tracked-issues`, `issue-status`, `issue-evidence`) |
 | `backup.conf` | one line, `BACKUP_DIR=<a folder that leaves the machine>` | the helper's `backup`, at the end of each sweep |
 
-Without `house-constraints.md`, the evaluator uses the general constraints in `resources/applicability-rubric.md`.
+Without `house-constraints.md`, the evaluator uses the general constraints in `resources/applicability-rubric.md`. A small one looks like this:
+
+```markdown
+# House constraints (read by the evaluator; never sent to the web)
+
+| Constraint | Why |
+|---|---|
+| No hook, agent or skill starts a headless Claude session | headless runs bill separately and run unattended |
+| `permissions.deny` rules are only ever added, never loosened | they guard secrets and force pushes |
+| Hooks must stay fast: under 50 ms per prompt | they run on every prompt on every machine |
+
+Facts: CLAUDE.md is about 40 KB; three machines share this config; one of them is the sweeper.
+```
 
 ## An optional CLAUDE.md rule
 
