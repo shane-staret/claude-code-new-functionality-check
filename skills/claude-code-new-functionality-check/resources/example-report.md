@@ -14,6 +14,7 @@ How to read it:
   - In the one historical block (RW-0036), the user's first name was replaced by "the user".
 
   Nothing else was changed.
+- **It predates the new-capability lens.** This sweep ran before the lens existed, so its summary has no "Brand-new capabilities" block and no `[NEW]` rows. A sweep today prints that block above the top proposals. SKILL.md's presentation recipe shows its shape, and `resources/ledger-format.md` has a format example of a `[NEW]` block. Neither is invented output.
 
 ## 1. The presentation
 

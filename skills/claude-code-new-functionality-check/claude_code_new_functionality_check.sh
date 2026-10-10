@@ -21,8 +21,18 @@
 #   claude_code_new_functionality_check.sh watch-diff                    READ-ONLY diff of the watched pages (docs index,
 #                                                  best practices, official plugin names) against
 #                                                  their snapshots; refuses error pages
-#   claude_code_new_functionality_check.sh watch-commit                  promote the pending snapshots (call AFTER the
-#                                                  ledger is written, never before)
+#   claude_code_new_functionality_check.sh watch-commit [<name>...]      promote the pending snapshots, or only the named
+#                                                  ones (call AFTER the ledger is written, never before)
+#   claude_code_new_functionality_check.sh launches [--since <date> [--until <date>]]
+#                                                  READ-ONLY list of launches (digest features, support-notes
+#                                                  entries, new docs pages) for the new-capability lens: the
+#                                                  unseen ones of the last 60 days, or a dated catch-up window
+#   claude_code_new_functionality_check.sh launches --record <slice> <result.json>
+#                                                  add a slice's launches to the seen-set (.pending) once its
+#                                                  result is complete for that slice and its quotes verify
+#   claude_code_new_functionality_check.sh launches --rebaseline-docs
+#                                                  take every current docs page as seen (.pending), after the
+#                                                  docs index was reorganized
 #   claude_code_new_functionality_check.sh tracked-issues [--file <p>]   issue|keywords|workaround rows of the tracked table
 #   claude_code_new_functionality_check.sh issue-status <n>              #n | state | state_reason | closed_at | title
 #   claude_code_new_functionality_check.sh issue-evidence <n>            every changelog bullet (Fixed included) that
@@ -38,9 +48,11 @@
 #                                                  recover a subagent's JSON reply from its transcript
 #                                                  (the <output-file> of its task notification), or
 #                                                  from pasted notification text on stdin
-#   claude_code_new_functionality_check.sh validate-candidates <evaluator|researcher> <file>
+#   claude_code_new_functionality_check.sh validate-candidates <evaluator|researcher> <file> [--launches <slice>]
 #                                                  schema check of subagent output: structure is strict;
-#                                                  a field up to 2x its length cap is only flagged OVERLONG
+#                                                  a field up to 2x its length cap is only flagged OVERLONG;
+#                                                  --launches: a new-capability result must give every
+#                                                  launch in <slice> exactly one disposition
 #   claude_code_new_functionality_check.sh inventory                     generated snapshot of the real config
 #   claude_code_new_functionality_check.sh ledger-add <curated.json>     render curated PROPOSE / RISK-WATCH candidates
 #                                                  into ledger.md + proposals.md with fresh ids
@@ -131,8 +143,20 @@ STATUS_VOCABULARY="proposed accepted declined deferred applied obsolete"
 # SOFT up to OVERLONG_FACTOR x the cap (the field is flagged: reword it while curating,
 # never log it verbatim) and rejects the whole result beyond that; ledger-add is HARD at
 # the cap, so nothing over-long can reach the ledger.
-FIELD_CAPS_JSON='{"title": 160, "feature_key": 80, "quote": 300, "by_quote": 300, "today": 1200, "proposed_change": 1200, "verify_before_adopting": 600, "reason_if_no_action": 400, "claim": 900, "url": 500, "docs_url": 500, "by_url": 500, "source": 40, "ref": 60, "version": 40, "slice": 400, "reason": 300}'
+FIELD_CAPS_JSON='{"title": 160, "feature_key": 80, "quote": 300, "by_quote": 300, "today": 1200, "proposed_change": 1200, "verify_before_adopting": 600, "reason_if_no_action": 400, "claim": 900, "url": 500, "docs_url": 500, "by_url": 500, "source": 40, "ref": 60, "version": 40, "slice": 400, "reason": 300, "capability": 600, "why": 300}'
 OVERLONG_FACTOR=2
+# The new-capability lens (see cmd_launches). Breadth says how much of the system a launch
+# would change; every launch in a slice gets exactly one disposition class.
+BREADTHS="system several one"
+DISPOSITION_CLASSES="new-capability iteration no-fit"
+LAUNCHES_SEEN_NAME="launches-seen"   # snapshots/<name>.txt, promoted by watch-commit like the watched pages
+LAUNCH_LOOKBACK_DAYS="${NEW_FUNCTIONALITY_CHECK_LAUNCH_LOOKBACK_DAYS:-60}"   # a weekly listing covers this many days
+LAUNCH_SLICE_MAX="${NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX:-50}"           # the most launches one slice may hold
+LAUNCHES_SLICE_MARKER="# Launches · slice-id"                                # how every launches slice begins
+# One definition of an official URL for every python reader (launches, the validator, the quote
+# verifier): https, no userinfo, no whitespace or markup characters; the host is then checked, as
+# text, against ALLOWED_HOSTS.
+OFFICIAL_URL_PATTERN='^https://([^/@:\s|`"<>]+)(?::\d+)?(?:[/?#][^\s|`"<>]*)?$'
 LOCK_STALE_SECS="${NEW_FUNCTIONALITY_CHECK_LOCK_STALE_SECS:-7200}"
 # verify-lead reuses a page it fetched this recently instead of fetching it once per quote:
 # several leads usually cite the same docs page, and back-to-back refetches trip rate limits.
@@ -158,6 +182,9 @@ ABSENT_FEATURE_PATHS="rules commands workflows output-styles keybindings.json"
 # The header comment IS the usage text: everything from line 2 up to the first
 # blank line, with the comment markers removed.
 print_usage() { awk 'NR > 1 && /^$/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"; }
+
+# The day a run counts as today, in UTC; overridable so the offline suites can pin it.
+today_utc() { emit "${NEW_FUNCTIONALITY_CHECK_TODAY:-$(date -u +%Y-%m-%d)}"; }
 
 emit() { printf '%s\n' "$*"; }
 warn() { printf 'claude-code-new-functionality-check: WARNING %s\n' "$*" >&2; }
@@ -788,8 +815,23 @@ cmd_watch_diff() {
 }
 
 cmd_watch_commit() {
-    local snapshots="$LEDGER_DIR/$SNAPSHOT_DIR_NAME" pending committed=0
-    for pending in "$snapshots"/*.pending; do
+    # watch-commit [<name>...] — with no name, every pending snapshot; with names, only those.
+    # A catch-up promotes only its own launches-seen: a bare commit would also promote page
+    # diffs that a crashed sweep left pending and never wrote to the ledger.
+    local snapshots="$LEDGER_DIR/$SNAPSHOT_DIR_NAME" pending name committed=0
+    for name in "$@"; do
+        # Only the snapshots this helper keeps: a mistyped name must never read as "nothing pending".
+        case " $WATCHED_PAGES $LAUNCHES_SEEN_NAME " in
+            *" $name "*) ;;
+            *) die "$EXIT_USAGE" "watch-commit: '$name' is not a snapshot this helper keeps (one of: $WATCHED_PAGES $LAUNCHES_SEEN_NAME)" ;;
+        esac
+    done
+    if [ $# -eq 0 ]; then
+        set -- "$snapshots"/*.pending
+    else
+        for name in "$@"; do shift; set -- "$@" "$snapshots/$name.pending"; done
+    fi
+    for pending in "$@"; do
         [ -f "$pending" ] || continue
         mv -f "$pending" "${pending%.pending}.txt"
         emit "committed snapshot: $(basename "${pending%.pending}")"
@@ -797,6 +839,454 @@ cmd_watch_commit() {
     done
     [ "$committed" -gt 0 ] || emit "nothing pending"
     return 0
+}
+
+# ---------------------------------------------------------------------- launches
+# The new-capability lens judges every LAUNCH (a new product, surface, extension point or
+# way of working) for what it could do for the whole Claude Code system, not only as a
+# tweak to a file that already exists. `launches` lists them deterministically from what
+# fetch already cached (digest features, support-notes entries, new docs-index pages), so
+# the lens can account for every one.
+# - A weekly listing covers the last LAUNCH_LOOKBACK_DAYS; older launches are reached only
+#   by a dated catch-up window (--since/--until). Dated launches therefore need no baseline:
+#   a record adds exactly its own slice's keys, so a lane that failed is listed again.
+# - Docs pages are undated. A machine's first record writes them as the baseline, and
+#   --rebaseline-docs does it again, on purpose, after the docs index is reorganized.
+# - Listing is read-only. --record writes .pending only after the result validates as
+#   complete for that slice and every proposal's quote verifies against its own launch row;
+#   watch-commit makes it final once the ledger is written.
+
+launch_knob() {
+    # launch_knob <variable> <value> — a tunable must be a plain whole number: a typo would
+    # otherwise reach python as a traceback, or open a window that ends before it starts.
+    case "$2" in
+        ''|*[!0-9]*) die "$EXIT_USAGE" "$1 must be a whole number of at most 6 digits (got '$2')" ;;
+    esac
+    [ "${#2}" -le 6 ] || die "$EXIT_USAGE" "$1 must be a whole number of at most 6 digits (got '$2')"
+}
+
+cmd_launches() {
+    local since="" until="" slice="" result="" mode="list"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since)  { [ $# -ge 2 ] && [ -n "$2" ]; } || die "$EXIT_USAGE" "--since needs a date (YYYY-MM-DD)"
+                      since="$2"; shift 2 ;;
+            --until)  { [ $# -ge 2 ] && [ -n "$2" ]; } || die "$EXIT_USAGE" "--until needs a date (YYYY-MM-DD)"
+                      until="$2"; shift 2 ;;
+            --record) { [ $# -ge 3 ] && [ -n "$2" ] && [ -n "$3" ]; } || die "$EXIT_USAGE" "--record needs <slice> <result.json>"
+                      mode="record"; slice="$2"; result="$3"; shift 3 ;;
+            --rebaseline-docs) mode="rebaseline-docs"; shift ;;
+            *)        die "$EXIT_USAGE" "launches: unknown argument '$1' (try --help)" ;;
+        esac
+    done
+    launch_knob NEW_FUNCTIONALITY_CHECK_LAUNCH_LOOKBACK_DAYS "$LAUNCH_LOOKBACK_DAYS"
+    launch_knob NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX "$LAUNCH_SLICE_MAX"
+    if [ "$mode" != list ]; then
+        [ -z "$since$until" ] || die "$EXIT_USAGE" "--$mode takes no window: it works on the seen-set as a whole"
+    elif [ -n "$until" ] && [ -z "$since" ]; then
+        die "$EXIT_USAGE" "--until needs --since"
+    fi
+    if [ "$mode" = record ]; then
+        [ -f "$slice" ] || die "$EXIT_USAGE" "launches slice not found: $slice"
+        [ -f "$result" ] || die "$EXIT_USAGE" "lens result not found: $result"
+        # A slice listed with format drift came from a parser that was not trustworthy that day.
+        if grep -q '^# FORMAT DRIFT:' "$slice"; then
+            die "$EXIT_PARSE" "$slice was listed with format drift: fix the source, list again and judge that slice — nothing recorded"
+        fi
+        # Only a complete, verified result for THIS slice is recorded: a failed lane must come back.
+        ( cmd_validate_candidates evaluator "$result" --launches "$slice" ) >/dev/null \
+            || die "$EXIT_USAGE" "$result is not a valid, complete lens result for $slice — nothing recorded"
+        ( quote_verifier batch "$result" "$slice" ) >/dev/null \
+            || die "$EXIT_USAGE" "a proposal's quote in $result does not verify against its own launch row in $slice — re-dispatch; nothing recorded"
+    fi
+    [ "$mode" = list ] || mkdir -p "$LEDGER_DIR/$SNAPSHOT_DIR_NAME"
+    find_python || die "$EXIT_USAGE" "launches needs a working python (none found)"
+    LAUNCHES_MODE="$mode" LAUNCHES_CACHE="$CACHE_DIR" LAUNCHES_SNAPSHOTS="$LEDGER_DIR/$SNAPSHOT_DIR_NAME" \
+    LAUNCHES_SEEN_NAME="$LAUNCHES_SEEN_NAME" LAUNCHES_TODAY="$(today_utc)" LAUNCHES_SINCE="$since" LAUNCHES_UNTIL="$until" \
+    LAUNCHES_LOOKBACK_DAYS="$LAUNCH_LOOKBACK_DAYS" LAUNCHES_SLICE_MAX="$LAUNCH_SLICE_MAX" LAUNCHES_SLICE="$slice" \
+    LAUNCHES_ALLOWED_HOSTS="$ALLOWED_HOSTS" LAUNCHES_OFFICIAL_URL="$OFFICIAL_URL_PATTERN" LAUNCHES_MARKER="$LAUNCHES_SLICE_MARKER" \
+    LAUNCHES_URL_SUPPORT="$URL_SUPPORT_NOTES" LAUNCHES_URL_DIGEST_BASE="$URL_DIGEST_BASE" LAUNCHES_URL_DOCS_INDEX="$URL_DOCS_INDEX" \
+        "$PYTHON_CMD" - <<'PY'
+import datetime, hashlib, html, os, re, sys
+from dataclasses import dataclass
+from html.parser import HTMLParser
+from urllib.parse import urljoin
+
+def setting(name):
+    return os.environ["LAUNCHES_" + name]
+
+MODE, CACHE, SNAPSHOTS, SEEN_NAME = setting("MODE"), setting("CACHE"), setting("SNAPSHOTS"), setting("SEEN_NAME")
+SINCE_TEXT, UNTIL_TEXT, SLICE_PATH, MARKER = setting("SINCE"), setting("UNTIL"), setting("SLICE"), setting("MARKER")
+LOOKBACK_DAYS, SLICE_MAX = int(setting("LOOKBACK_DAYS")), int(setting("SLICE_MAX"))
+ALLOWED, OFFICIAL_URL = set(setting("ALLOWED_HOSTS").split()), re.compile(setting("OFFICIAL_URL"))
+URL_SUPPORT, URL_DIGEST_BASE, URL_DOCS_INDEX = setting("URL_SUPPORT"), setting("URL_DIGEST_BASE"), setting("URL_DOCS_INDEX")
+EXIT_USAGE, EXIT_PARTIAL, EXIT_PARSE = 1, 2, 3
+DOCS_EXCLUDED = ("/whats-new/", "/whats-new.md", "/changelog")   # digests and the changelog have their own lanes
+TEXT_CAP = 2000     # characters of an entry's text the slice keeps
+ECHO_CAP = 80       # characters of an unexpected heading or argument a message repeats
+SEEN_PATH = os.path.join(SNAPSHOTS, SEEN_NAME + ".txt")
+PENDING_PATH = os.path.join(SNAPSHOTS, SEEN_NAME + ".pending")
+
+def die(code, message):
+    print("claude-code-new-functionality-check: ERROR %s" % message, file=sys.stderr)
+    sys.exit(code)
+
+if not hasattr(datetime.date, "fromisocalendar"):
+    die(EXIT_USAGE, "launches needs python 3.8 or later")
+
+def day(text, flag):
+    try:
+        return datetime.datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        die(EXIT_USAGE, "%s must be a real date, YYYY-MM-DD (got %r)" % (flag, text[:ECHO_CAP]))
+
+def norm(text):
+    return re.sub(r"\s+", " ", text or "").strip()
+
+def plain(fragment):
+    return norm(html.unescape(re.sub(r"<[^>]+>", "", fragment or "")))
+
+def key_part(text):
+    return norm(text).lower().replace("|", "/")
+
+def official(url):
+    match = OFFICIAL_URL.match(url or "")
+    return bool(match) and match.group(1) in ALLOWED
+
+def capped(text):
+    return text if len(text) <= TEXT_CAP else text[:TEXT_CAP].rstrip() + " …"
+
+TODAY = day(setting("TODAY"), "today")
+
+@dataclass
+class Launch:
+    source: str          # digest | support | docs
+    date: object         # a datetime.date; None for a docs page, which is undated
+    title: str
+    text: str
+    url: str             # the official page the launch was read from
+    label: str           # how a slice row names the source
+    key: str             # the launch's identity in the seen-set
+    docs_url: str = ""   # the launch's own link, offered only when it is on an official host
+    pill: str = ""
+    note: str = ""
+
+class Listing:
+    """Every launch the cached sources hold, and what was missing or did not parse."""
+    def __init__(self):
+        self.launches, self.problems, self.skipped = [], [], []
+
+def digest_launches(listing):
+    folder = os.path.join(CACHE, "digests")
+    names = sorted(name for name in os.listdir(folder) if re.match(r"^\d{4}-w\d{1,2}\.md$", name)) if os.path.isdir(folder) else []
+    if not names:
+        listing.skipped.append("digests — none in the cache (run fetch)")
+        return
+    for name in names:
+        slug = name[:-3]
+        year, week = slug.split("-w")
+        try:
+            monday = datetime.date.fromisocalendar(int(year), int(week), 1)
+        except ValueError:
+            listing.problems.append("digest %s is not a real ISO week" % slug)
+            continue
+        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+        blocks = re.split(r'<div className="digest-feature">', text)[1:]
+        meta = re.search(r'className="digest-meta">(.*?)</div>', text, re.S)
+        count = re.search(r"(\d+)\s+features?\b", meta.group(1)) if meta else None
+        if count is None or int(count.group(1)) != len(blocks):
+            listing.problems.append("digest %s: %d feature block(s), but its own count says %s (format drift)"
+                                    % (slug, len(blocks), count.group(1) if count else "nothing"))
+            continue
+        for block in blocks:
+            title = re.search(r'className="digest-feature-title">(.*?)</span>', block, re.S)
+            lede = re.search(r'className="digest-feature-lede">(.*?)</p>', block, re.S)
+            if not title or not lede or not plain(lede.group(1)):
+                listing.problems.append("digest %s: a feature without a title or a lede (format drift)" % slug)
+                continue
+            pills = [plain(pill) for pill in re.findall(r'className="digest-feature-pill">(.*?)</span>', block, re.S)]
+            link_tag = re.search(r'<a\b[^>]*className="digest-feature-link"[^>]*>', block)
+            href = re.search(r'href="([^"]*)"', link_tag.group(0)) if link_tag else None
+            docs_url = urljoin(URL_DIGEST_BASE + "/", href.group(1)) if href else ""
+            listing.launches.append(Launch(
+                "digest", monday, plain(title.group(1)), capped(plain(lede.group(1))), "%s/%s" % (URL_DIGEST_BASE, slug),
+                "whats-new " + slug, "digest|%s|%s" % (slug, key_part(plain(title.group(1)))),
+                docs_url if official(docs_url) else "", ", ".join(pill for pill in pills if pill)))
+
+class NotesParser(HTMLParser):
+    """The support notes as blocks: <h2> months, <h3> dates, and paragraph or list text. A <p>
+    inside a list item belongs to that item: only a top-level paragraph can be an entry's title,
+    one that is bold up to its end or up to a line break. Script and style text is never read."""
+    HIDDEN = ("script", "style", "noscript")
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.blocks, self.current, self.list_depth, self.hidden = [], None, 0, 0
+    def open_block(self, tag):
+        self.end_block()
+        self.current = {"tag": tag, "before": [], "after": [], "bold": [], "in_bold": 0, "broken": False, "links": []}
+    def end_block(self):
+        if self.current is not None:
+            self.blocks.append(self.current)
+            self.current = None
+    def handle_starttag(self, tag, attrs):
+        if tag in self.HIDDEN:
+            self.hidden += 1
+            return
+        if tag == "li":
+            if self.list_depth == 0:
+                self.open_block("li")
+            self.list_depth += 1
+            return
+        if tag in ("h2", "h3") or (tag == "p" and self.list_depth == 0):
+            self.open_block(tag)
+            return
+        block = self.current
+        if block is None:
+            return
+        if tag in ("b", "strong"):
+            block["in_bold"] += 1
+        elif tag == "br":
+            block["broken"] = True
+        elif tag == "a":
+            href = dict(attrs).get("href")
+            if href:
+                block["links"].append(href)
+    def handle_endtag(self, tag):
+        if tag in self.HIDDEN:
+            self.hidden = max(0, self.hidden - 1)
+            return
+        block = self.current
+        if tag == "li":
+            self.list_depth = max(0, self.list_depth - 1)
+            if self.list_depth == 0 and block is not None and block["tag"] == "li":
+                self.end_block()
+            return
+        if block is None:
+            return
+        if tag in ("b", "strong") and block["in_bold"]:
+            block["in_bold"] -= 1
+        elif tag == block["tag"]:
+            self.end_block()
+    def handle_data(self, data):
+        block = self.current
+        if block is None or self.hidden:
+            return
+        (block["after"] if block["broken"] else block["before"]).append(data)
+        if block["in_bold"] and not block["broken"]:
+            block["bold"].append(data)
+
+def support_launches(listing):
+    path = os.path.join(CACHE, "support-release-notes.html")
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        listing.skipped.append("support notes — not in the cache (run fetch)")
+        return
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        page = handle.read()
+    start, end = page.find("<article"), page.find("</article>")
+    if start >= 0 and end > start:
+        page = page[start:end]                      # the page's own navigation and footer are not entries
+    parser = NotesParser()
+    parser.feed(page)
+    parser.close()                                  # flushes text the parser was still holding back
+    parser.end_block()
+    entries, date, entry, dates_seen = [], None, None, 0
+    for block in parser.blocks:
+        before, after = norm("".join(block["before"])), norm("".join(block["after"]))
+        if block["tag"] == "h2":
+            date, entry = None, None
+            continue
+        if block["tag"] == "h3":
+            dates_seen += 1
+            entry = None
+            try:
+                date = datetime.datetime.strptime(before, "%B %d, %Y").date()
+            except ValueError:
+                listing.problems.append("support notes: the date heading %r is not a date (format drift)" % before[:ECHO_CAP])
+                date = None
+            continue
+        if date is None or not (before or after):
+            continue
+        bold = norm("".join(block["bold"]))
+        if block["tag"] == "p" and bold and bold == before:
+            entry = {"date": date, "title": bold, "body": [after] if after else [], "links": list(block["links"]) if after else []}
+            entries.append(entry)
+        elif entry is None:
+            listing.problems.append("support notes: text before the first title of %s (format drift)" % date.isoformat())
+        else:
+            entry["body"].append(norm(before + " " + after))
+            entry["links"].extend(block["links"])
+    if dates_seen == 0:
+        listing.problems.append("support notes: no dated entry at all (format drift)")
+    for entry in entries:
+        text = norm(" ".join(entry["body"]))
+        if not text:
+            listing.problems.append("support notes: the entry %r of %s has no text (format drift)"
+                                    % (entry["title"][:ECHO_CAP], entry["date"].isoformat()))
+            continue
+        links = [urljoin(URL_SUPPORT, link) for link in entry["links"]]
+        listing.launches.append(Launch(
+            "support", entry["date"], entry["title"], capped(text), URL_SUPPORT, "support-notes",
+            "support|%s|%s" % (entry["date"].isoformat(), key_part(entry["title"])),
+            next((link for link in links if official(link)), "")))
+
+def docs_launches(listing):
+    path = os.path.join(CACHE, "llms.txt")
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        listing.skipped.append("docs index — not in the cache (run fetch)")
+        return
+    entries, urls = 0, set()
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            match = re.match(r"^- \[([^\]]+)\]\((https://[^)\s]+)\)(?::\s*(.*))?$", line.strip())
+            if not match:
+                continue
+            entries += 1
+            title, url, description = match.group(1), match.group(2), match.group(3) or ""
+            if url in urls or any(part in url for part in DOCS_EXCLUDED):
+                continue
+            urls.add(url)
+            listing.launches.append(Launch("docs", None, norm(title), capped(norm(description)), URL_DOCS_INDEX,
+                                           "docs-index (new page)", "docs|" + url, url if official(url) else ""))
+    if entries == 0:
+        listing.problems.append("docs index: no page entries (format drift)")
+
+def read_cache():
+    listing = Listing()
+    digest_launches(listing)
+    support_launches(listing)
+    docs_launches(listing)
+    # A stable sort: within one day the digest features come first, as the sources were read,
+    # and the undated docs pages come last.
+    listing.launches.sort(key=lambda launch: launch.date or datetime.date.max)
+    return listing
+
+def read_keys(path):
+    if not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        return set(line.rstrip("\n") for line in handle if line.strip())
+
+def known_keys():
+    # Everything already judged, committed or still pending: records accumulate, never replace.
+    return (read_keys(SEEN_PATH) or set()) | (read_keys(PENDING_PATH) or set())
+
+def write_pending(keys):
+    # Beside the target and renamed, so a crash mid-write can never truncate the seen-set.
+    scratch = PENDING_PATH + ".tmp"
+    with open(scratch, "w", encoding="utf-8") as handle:
+        handle.write("".join(key + "\n" for key in sorted(keys)))
+    os.replace(scratch, PENDING_PATH)
+
+def record_slice():
+    with open(SLICE_PATH, encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+    rows = re.findall(r"^L[0-9]+ \|", text, re.M)
+    keys = re.findall(r"^    key: (.+)$", text, re.M)
+    if len(keys) != len(rows):
+        die(EXIT_USAGE, "%s has %d key line(s) for %d launch(es): it was edited after it was listed — nothing recorded"
+                        % (SLICE_PATH, len(keys), len(rows)))
+    known, baseline = known_keys(), set()
+    # The one baseline: docs pages are undated, so a page that exists at a machine's first record
+    # is not a launch. That record writes every current page; later pages are listed as new.
+    if not any(key.startswith("docs|") for key in known):
+        docs = Listing()
+        docs_launches(docs)
+        baseline = set(launch.key for launch in docs.launches)
+    write_pending(known | set(keys) | baseline)
+    print("recorded %d judged launch(es)%s in %s — `watch-commit %s` (or the sweep's watch-commit) makes it final"
+          % (len(keys), (" and %d docs page(s) as the docs baseline" % len(baseline)) if baseline else "", PENDING_PATH, SEEN_NAME))
+
+def rebaseline_docs():
+    docs = Listing()
+    docs_launches(docs)
+    if docs.problems or docs.skipped:
+        die(EXIT_PARTIAL, "the docs index did not parse (%s) — nothing rebaselined" % "; ".join(docs.problems + docs.skipped))
+    keys = set(launch.key for launch in docs.launches)
+    write_pending(known_keys() | keys)
+    print("recorded %d docs page(s) as the docs baseline in %s — `watch-commit %s` makes it final" % (len(keys), PENDING_PATH, SEEN_NAME))
+
+def mark_retitled(chosen, listing, known):
+    # An unseen entry on a date (or in a week) that holds as many entries as before, one of the
+    # old ones now gone, was most likely re-titled upstream. The evaluator is told what to do.
+    current = [launch.key for launch in listing.launches]
+    for launch in chosen:
+        if launch.source == "docs":
+            continue
+        prefix = launch.key.rsplit("|", 1)[0] + "|"
+        gone = sorted(key[len(prefix):] for key in known if key.startswith(prefix) and key not in current)
+        if gone and sum(key.startswith(prefix) for key in current) == sum(key.startswith(prefix) for key in known):
+            launch.note = "possibly re-titled (seen before as: %s)" % "; ".join(gone)
+
+def select(listing):
+    dated = [launch for launch in listing.launches if launch.date is not None]
+    if SINCE_TEXT:
+        since = day(SINCE_TEXT, "--since")
+        until = day(UNTIL_TEXT, "--until") if UNTIL_TEXT else TODAY
+        if until < since:
+            die(EXIT_USAGE, "--until %s is before --since %s" % (until, since))
+        chosen = [launch for launch in dated if since <= launch.date <= until]
+        if len(chosen) > SLICE_MAX:
+            die(EXIT_USAGE, "%d launches between %s and %s: split the window (at most %d per slice, "
+                            "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX)" % (len(chosen), since, until, SLICE_MAX))
+        return chosen, "catch-up %s → %s (dated launches, whatever the seen-set says; docs pages are never in a window)" % (since, until)
+    seen = read_keys(SEEN_PATH)
+    known = seen or set()
+    start = TODAY - datetime.timedelta(days=LOOKBACK_DAYS)
+    docs_baselined = any(key.startswith("docs|") for key in known)
+    chosen = [launch for launch in dated if start <= launch.date <= TODAY and launch.key not in known]
+    if docs_baselined:
+        chosen += [launch for launch in listing.launches if launch.date is None and launch.key not in known]
+    if len(chosen) > SLICE_MAX:
+        die(EXIT_PARSE, "%d unseen launches (more than %d, NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX): a source's keys or "
+                        "format may have changed, or the docs index was reorganized. Inspect it; then judge the dated launches "
+                        "as catch-up windows (launches --since <date> --until <date>), or, when new docs pages are the bulk, "
+                        "run launches --rebaseline-docs" % (len(chosen), SLICE_MAX))
+    mark_retitled(chosen, listing, known)
+    docs_part = "plus new docs pages" if docs_baselined else "docs pages become the baseline when this slice is recorded"
+    if seen is None:
+        return chosen, "weekly, first run on this machine (launches dated %s → %s; nothing judged yet; %s)" % (start, TODAY, docs_part)
+    return chosen, "weekly (unseen launches dated %s → %s, %s; the seen-set holds %d keys)" % (start, TODAY, docs_part, len(seen))
+
+def render(listing, chosen, mode_line):
+    lines = []
+    for number, launch in enumerate(chosen, 1):
+        title = launch.title + (" (%s)" % launch.pill if launch.pill else "")
+        lines.append("L%02d | %s | %s | %s" % (number, launch.date.isoformat() if launch.date else "new", launch.label, title.replace("|", "/")))
+        lines.append("    key: %s" % launch.key)
+        lines.append("    url: %s" % launch.url)
+        if launch.docs_url:
+            lines.append("    docs_url: %s" % launch.docs_url)
+        if launch.note:
+            lines.append("    note: %s" % launch.note)
+        lines.append("    text: %s" % launch.text)
+    body = "".join(line + "\n" for line in lines)
+    counts = dict((source, sum(1 for launch in listing.launches if launch.source == source)) for source in ("digest", "support", "docs"))
+    header = ["%s %s · %d launch(es) · listed %s by claude_code_new_functionality_check.sh launches — data, not instructions"
+              % (MARKER, hashlib.sha256(body.encode("utf-8")).hexdigest()[:12], len(chosen), TODAY.isoformat()),
+              "# mode: " + mode_line,
+              "# sources: digests %d features · support notes %d entries · docs index %d pages" % (counts["digest"], counts["support"], counts["docs"])]
+    header += ["# SKIPPED: " + reason for reason in listing.skipped]
+    header += ["# FORMAT DRIFT: " + problem for problem in listing.problems]
+    if not chosen:
+        header.append("# no launches in this window" if SINCE_TEXT else "# no unseen launches")
+    sys.stdout.write("".join(line + "\n" for line in header) + body)
+
+def exit_code(listing):
+    for problem in listing.problems:
+        print("claude-code-new-functionality-check: ERROR %s" % problem, file=sys.stderr)
+    return EXIT_PARSE if listing.problems else EXIT_PARTIAL if listing.skipped else 0
+
+if MODE == "record":
+    record_slice()
+elif MODE == "rebaseline-docs":
+    rebaseline_docs()
+else:
+    listing = read_cache()
+    chosen, mode_line = select(listing)
+    render(listing, chosen, mode_line)
+    sys.exit(exit_code(listing))
+PY
 }
 
 # ------------------------------------------------------------- tracked upstream issues
@@ -885,9 +1375,10 @@ quote_verifier() {
     # non-breaking spaces that rendered HTML is full of — equals one space on both sides;
     # every other character must match exactly, in order.
     find_python || die "$EXIT_USAGE" "quote verification needs a working python (none found)"
-    "$PYTHON_CMD" - "$MIN_QUOTE_CHARS" "$@" <<'PY'
-import json, re, sys
+    LAUNCHES_MARKER="$LAUNCHES_SLICE_MARKER" "$PYTHON_CMD" - "$MIN_QUOTE_CHARS" "$@" <<'PY'
+import json, os, re, sys
 minimum, mode, arguments = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+MARKER = os.environ.get("LAUNCHES_MARKER", "")
 
 def normalize(text):
     return re.sub(r"\s+", " ", text).strip()
@@ -912,13 +1403,39 @@ if mode == "single":
 results, haystacks = arguments[0], [read_normalized(path) for path in arguments[1:]]
 with open(results, encoding="utf-8") as handle:
     document = json.load(handle)
+header = document.get("header") if isinstance(document.get("header"), dict) else {}
+
+def launch_texts(path):
+    # {launch id: its row's text}. A lens proposal's quote must come from its OWN launch, never
+    # from another row or from the slice's header lines.
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        rows = re.split(r"(?m)^(?=L[0-9]+ \|)", handle.read())
+    texts = {}
+    for row in rows:
+        ident, text = re.match(r"^(L[0-9]+) \|", row), re.search(r"^    text: (.*)$", row, re.M)
+        if ident and text:
+            texts[ident.group(1)] = normalize(text.group(1))
+    return texts
+
+rows = {}
+for path, haystack in zip(arguments[1:], haystacks):
+    if MARKER and haystack.startswith(MARKER):
+        # A launches slice belongs to the new-capability lens: pairing it with any other result
+        # means the lens's completeness check was skipped.
+        if header.get("lens") != "new-capability":
+            print("claude-code-new-functionality-check: ERROR %s is a launches slice: only a new-capability result "
+                  "(header.lens) is verified against it" % path, file=sys.stderr)
+            sys.exit(1)
+        rows.update(launch_texts(path))
 checked = verified = 0
 for number, item in enumerate(document.get("candidates", []), 1):
     if item.get("verdict") == "NO-ACTION":
         continue
     checked += 1
     quote = normalize(str((item.get("upstream") or {}).get("quote", "")))
-    found = len(quote) >= minimum and any(quote in haystack for haystack in haystacks)
+    launch = item.get("launch")
+    pool = [rows.get(launch, "") if isinstance(launch, str) else ""] if rows else haystacks
+    found = len(quote) >= minimum and any(quote in haystack for haystack in pool)
     verified += 1 if found else 0
     print("%s | %d | %s" % ("verified" if found else "NOT-VERIFIED", number, item.get("title", "")))
 print("%d of %d actionable quotes verified" % (verified, checked))
@@ -1094,14 +1611,31 @@ print("saved %s (%d %s; reply in %d piece(s))" % (out_path, len(document.get(kin
 # official hosts where an official host is claimed. (Python is required here: a
 # field whitelist with nested rules is not something to improvise in jq.)
 cmd_validate_candidates() {
-    local kind="${1:-}" file="${2:-}"
+    # validate-candidates <evaluator|researcher> <file> [--launches <slice>]. Arguments are parsed
+    # strictly: a mistyped flag must be an error, never a silently skipped completeness check.
+    local kind="${1:-}" file="${2:-}" launches=""
     case "$kind" in evaluator|researcher) ;; *) die "$EXIT_USAGE" "validate-candidates needs a kind: evaluator | researcher" ;; esac
+    if [ $# -ge 2 ]; then shift 2; else shift $#; fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --launches)
+                [ "$kind" = evaluator ] || die "$EXIT_USAGE" "--launches applies to evaluator results only"
+                { [ $# -ge 2 ] && [ -n "$2" ]; } || die "$EXIT_USAGE" "--launches needs the slice file the result judged"
+                launches="$2"; shift 2 ;;
+            *) die "$EXIT_USAGE" "validate-candidates: unknown argument '$1'" ;;
+        esac
+    done
     [ -f "$file" ] || die "$EXIT_USAGE" "candidates file not found: $file"
+    [ -z "$launches" ] || [ -f "$launches" ] || die "$EXIT_USAGE" "launches slice not found: $launches"
     find_python || die "$EXIT_USAGE" "validate-candidates needs a working python (none found)"
-    "$PYTHON_CMD" - "$kind" "$file" "$ALLOWED_HOSTS" "$FIELD_CAPS_JSON" "$OVERLONG_FACTOR" <<'PY'
-import json, re, sys
+    "$PYTHON_CMD" - "$kind" "$file" "$ALLOWED_HOSTS" "$FIELD_CAPS_JSON" "$OVERLONG_FACTOR" "$launches" "$BREADTHS" \
+        "$DISPOSITION_CLASSES" "$OFFICIAL_URL_PATTERN" <<'PY'
+import hashlib, json, re, sys
 kind, path, allowed_hosts = sys.argv[1], sys.argv[2], set(sys.argv[3].split())
 CAPS, OVERLONG_FACTOR = json.loads(sys.argv[4]), int(sys.argv[5])
+LAUNCHES, BREADTHS, CLASSES = sys.argv[6], set(sys.argv[7].split()), set(sys.argv[8].split())
+OFFICIAL_URL = re.compile(sys.argv[9])
+MIN_WHY = 8        # a disposition's reason must actually say something ("n/a" does not)
 DEFAULT_CAP = 300
 MAX_ITEMS = 40
 VERDICTS = {"PROPOSE", "RISK-WATCH", "NO-ACTION"}
@@ -1130,8 +1664,12 @@ def check_string(where, key, value, required=False):
         overlong.append("%s: %s is %d characters (cap %d) — reword it while curating; never log it verbatim" % (where, key, len(value), cap))
 
 def host_of(url):
-    match = re.match(r"^https://([^/@:]+)(?::\d+)?(?:/|$)", url)
+    match = OFFICIAL_URL.match(url)
     return match.group(1) if match else None
+
+def one_of(value, allowed):
+    # Membership that cannot crash: a list or an object where a word belongs is just "not one of".
+    return isinstance(value, str) and value in allowed
 
 def check_url(where, key, value, official, required=False):
     check_string(where, key, value, required)
@@ -1139,7 +1677,7 @@ def check_url(where, key, value, official, required=False):
         return
     host = host_of(value)
     if host is None:
-        fail(where, "%s must be an https URL without userinfo" % key)
+        fail(where, "%s must be a clean https URL (no userinfo, whitespace or markup characters)" % key)
     elif official and host not in allowed_hosts:
         fail(where, "%s host %s is not an official host" % (key, host))
 
@@ -1154,7 +1692,7 @@ def only_keys(where, obj, allowed):
 def check_levels(where, item, required):
     for key, allowed in LEVELS.items():
         if key in item:
-            if item[key] not in allowed:
+            if not one_of(item[key], allowed):
                 fail(where, "%s must be one of %s" % (key, sorted(allowed)))
         elif required:
             fail(where, "%s is required" % key)
@@ -1162,17 +1700,92 @@ def check_levels(where, item, required):
 def check_common(where, item, required):
     check_string(where, "title", item.get("title", ""), True)
     check_string(where, "feature_key", item.get("feature_key", ""), True)
-    if item.get("target_type") not in TARGETS:
+    if not one_of(item.get("target_type"), TARGETS):
         fail(where, "target_type must be one of %s" % sorted(TARGETS))
     check_levels(where, item, required)
     if required and not isinstance(item.get("sensitive"), bool):
         fail(where, "sensitive (true/false) is required")
 
+def read_slice(slice_path):
+    # (stated slice-id, slice-id of the content, launch ids) — the hash covers everything from the
+    # first launch line on, so a slice edited after it was listed no longer matches its own id.
+    with open(slice_path, encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+    stated = re.search(r"slice-id ([0-9a-f]{12})", text)
+    first = re.search(r"^L[0-9]+ \|", text, re.M)
+    body = text[first.start():] if first else ""
+    return (stated.group(1) if stated else None,
+            hashlib.sha256(body.encode("utf-8")).hexdigest()[:12],
+            re.findall(r"^(L[0-9]+) \|", text, re.M))
+
+def check_lens(header, items):
+    # The new-capability lens: every launch in the slice gets exactly one disposition, every
+    # new capability exactly one PROPOSE, and nothing is omitted. Silence is never a result.
+    stated, content, ids = read_slice(LAUNCHES)
+    if stated is None:
+        fail("launches", "%s is not a launches slice (it has no slice-id)" % LAUNCHES); return {}
+    if stated != content:
+        fail("launches", "the slice was edited after it was listed (slice-id %s, content %s)" % (stated, content))
+    if header.get("lens") != "new-capability":
+        fail("header", "lens must be \"new-capability\" in a launches result")
+    if stated not in str(header.get("slice", "")):
+        fail("header", "slice must name slice-id %s: this result was made for another slice" % stated)
+    if header.get("items_reviewed") != len(ids):
+        fail("header", "items_reviewed must be %d, the number of launches in the slice" % len(ids))
+    if header.get("omitted_count") != 0:
+        fail("header", "omitted_count must be 0: under the lens every launch gets a disposition")
+    by_launch = {}
+    dispositions = header.get("dispositions")
+    if not isinstance(dispositions, list):
+        fail("header", "dispositions must be a list, one entry per launch"); dispositions = []
+    for number, entry in enumerate(dispositions, 1):
+        where = "disposition %d" % number
+        if not only_keys(where, entry, {"launch", "class", "why"}):
+            continue
+        launch = entry.get("launch")
+        if not one_of(launch, ids):
+            fail(where, "launch %r is not in the slice" % (launch,)); continue
+        if launch in by_launch:
+            fail(where, "%s has two dispositions" % launch); continue
+        if not one_of(entry.get("class"), CLASSES):
+            fail(where, "class must be one of %s" % sorted(CLASSES))
+        why = entry.get("why", "")
+        check_string(where, "why", why, True)
+        if isinstance(why, str) and why.strip() and len(why.strip()) < MIN_WHY:
+            fail(where, "why must give the reason in at least %d characters, not a stub" % MIN_WHY)
+        by_launch[launch] = entry.get("class") if isinstance(entry.get("class"), str) else None
+    missing = [launch for launch in ids if launch not in by_launch]
+    if missing:
+        fail("header", "no disposition for %s: every launch gets one" % ", ".join(missing))
+    proposed = set()
+    for number, item in enumerate(items[:MAX_ITEMS], 1):
+        where = "candidate %d" % number
+        if not isinstance(item, dict):
+            continue
+        if item.get("verdict") != "PROPOSE":
+            fail(where, "under the lens only PROPOSE candidates exist; a launch with no fit says why in its disposition"); continue
+        launch = item.get("launch")
+        if not isinstance(launch, str) or by_launch.get(launch) != "new-capability":
+            fail(where, "launch %r has no new-capability disposition" % (launch,)); continue
+        if launch in proposed:
+            fail(where, "%s has two proposals" % launch)
+        proposed.add(launch)
+        check_string(where, "capability", item.get("capability", ""), True)
+        if not one_of(item.get("breadth"), BREADTHS):
+            fail(where, "breadth must be one of %s" % sorted(BREADTHS))
+    for launch in ids:
+        if by_launch.get(launch) == "new-capability" and launch not in proposed:
+            fail("header", "%s is judged a new capability but has no PROPOSE" % launch)
+    return by_launch
+
 def check_evaluator(doc):
     if not only_keys("document", doc, {"header", "candidates"}):
         return
     header = doc.get("header")
-    if only_keys("header", header, {"slice", "items_reviewed", "omitted_count"}):
+    header_keys = {"slice", "items_reviewed", "omitted_count"} | ({"lens", "dispositions"} if LAUNCHES else set())
+    if isinstance(header, dict) and "lens" in header and not LAUNCHES:
+        fail("header", "a lens result is validated with --launches <the slice it judged>")
+    if only_keys("header", header, header_keys):
         check_string("header", "slice", header.get("slice", ""), True)
         for key in ("items_reviewed", "omitted_count"):
             if not isinstance(header.get(key), int) or isinstance(header.get(key), bool) or header.get(key) < 0:
@@ -1184,12 +1797,14 @@ def check_evaluator(doc):
         fail("document", "more than %d candidates in one dispatch" % MAX_ITEMS)
     allowed = {"verdict", "title", "feature_key", "target_type", "target_paths", "upstream", "today", "proposed_change",
                "benefit", "effort", "risk", "sensitive", "verify_before_adopting", "reason_if_no_action"}
+    if LAUNCHES:
+        allowed |= {"launch", "capability", "breadth"}
     for number, item in enumerate(items[:MAX_ITEMS], 1):
         where = "candidate %d" % number
         if not only_keys(where, item, allowed):
             continue
         verdict = item.get("verdict")
-        if verdict not in VERDICTS:
+        if not one_of(verdict, VERDICTS):
             fail(where, "verdict must be one of %s" % sorted(VERDICTS)); continue
         actionable = verdict != "NO-ACTION"
         check_common(where, item, actionable)
@@ -1215,7 +1830,12 @@ def check_evaluator(doc):
         if verdict == "NO-ACTION" and not str(item.get("reason_if_no_action", "")).strip():
             fail(where, "a NO-ACTION needs reason_if_no_action")
     counts = dict((v, sum(1 for i in items if isinstance(i, dict) and i.get("verdict") == v)) for v in VERDICTS)
-    return "%d PROPOSE, %d RISK-WATCH, %d NO-ACTION" % (counts["PROPOSE"], counts["RISK-WATCH"], counts["NO-ACTION"])
+    summary = "%d PROPOSE, %d RISK-WATCH, %d NO-ACTION" % (counts["PROPOSE"], counts["RISK-WATCH"], counts["NO-ACTION"])
+    if LAUNCHES and isinstance(header, dict):
+        judged = list(check_lens(header, items).values())
+        summary += "; dispositions: %d new-capability, %d iteration, %d no-fit" % (
+            judged.count("new-capability"), judged.count("iteration"), judged.count("no-fit"))
+    return summary
 
 def check_researcher(doc):
     if not only_keys("document", doc, {"header", "leads"}):
@@ -1249,7 +1869,7 @@ def check_researcher(doc):
         if not only_keys(where, item, allowed):
             continue
         check_common(where, item, True)
-        if item.get("source_tier") not in TIERS:
+        if not one_of(item.get("source_tier"), TIERS):
             fail(where, "source_tier must be one of %s" % sorted(TIERS))
         check_url(where, "url", item.get("url", ""), False, True)
         quote = item.get("quote", "")
@@ -1364,6 +1984,137 @@ frontmatter_value() {
          NR > 1 { key = $0; sub(/:.*/, "", key); if (key == want) { value = $0; sub(/^[^:]*:[ \t]*/, "", value); print value; exit } }' "$1"
 }
 
+claude_md_sections() {
+    # claude_md_sections <file> -> the ## headings of a CLAUDE.md as one line, the map of the
+    # system's subsystems: fenced lines skipped, control characters removed, each heading capped.
+    find_python || { emit "(not listed: this needs a working python, and none was found)"; return 0; }
+    "$PYTHON_CMD" - "$1" <<'PY'
+import re, sys
+HEADING_CAP, HEADINGS_MAX = 80, 60
+headings, fenced = [], False
+with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+    for line in handle:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced and line.startswith("## "):
+            text = re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f]", "", line[3:])).strip()
+            headings.append(text[:HEADING_CAP])
+print("; ".join(headings[:HEADINGS_MAX]) if headings else "(no ## headings)")
+PY
+}
+
+system_layer_report() {
+    # The rest of the system layer: MCP servers (configured, claude.ai connectors and plugin-
+    # provided), installed plugins and marketplaces. Only an allowlist of fields is printed
+    # (names, scopes, types, versions), masked and capped, so no URL, path, command, argument,
+    # header or env value can reach the inventory. A missing or malformed file is reported,
+    # never fatal. .claude.json lives in CLAUDE_CONFIG_DIR when that is set, else in HOME; the
+    # override exists so the offline suite never reads the real one.
+    if ! find_python; then
+        emit "### MCP servers, plugins and marketplaces"
+        emit "(not listed: this needs a working python, and none was found)"
+        return 0
+    fi
+    "$PYTHON_CMD" - "${NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON:-${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json}" "$CLAUDE_DIR" <<'PY'
+import json, os, re, sys
+claude_json, claude_dir = sys.argv[1], sys.argv[2]
+NAME_CAP = 60
+KNOWN_TYPES = ("stdio", "sse", "http", "ws")
+
+def load(path):
+    if not os.path.isfile(path):
+        return None, "(none: no %s)" % os.path.basename(path)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle), None
+    except (OSError, ValueError, RecursionError):
+        return None, "(unreadable)"
+
+def safe(value):
+    # Names only: anything outside a plain label alphabet is masked, and the length is capped.
+    return re.sub(r"[^A-Za-z0-9 ._@+-]", "?", value)[:NAME_CAP] if isinstance(value, str) else "-"
+
+def keys_of(mapping):
+    return sorted(mapping) if isinstance(mapping, dict) else []
+
+def server_type(server):
+    value = server.get("type", "stdio") if isinstance(server, dict) else None
+    return value if value in KNOWN_TYPES else "?"
+
+def plugin_servers(install):
+    found, unreadable = [], 0
+    for candidate in (os.path.join(install, ".mcp.json"), os.path.join(install, ".claude-plugin", "plugin.json")):
+        if not os.path.isfile(candidate):
+            continue
+        data, problem = load(candidate)
+        if problem or not isinstance(data, dict):
+            unreadable += 1
+            continue
+        servers = data.get("mcpServers", data if candidate.endswith(".mcp.json") else None)
+        if isinstance(servers, dict):
+            found.extend(name for name in servers if isinstance(servers[name], dict))
+    return found, unreadable
+
+state, state_problem = load(claude_json)
+if state is not None and not isinstance(state, dict):
+    state_problem = "(unreadable)"              # valid JSON, but not the object Claude Code writes
+state = state if isinstance(state, dict) else {}
+plugins, plugins_problem = load(os.path.join(claude_dir, "plugins", "installed_plugins.json"))
+records = plugins.get("plugins") if isinstance(plugins, dict) else None
+plugin_lines, provided, manifests_unreadable = [], set(), 0
+for name in keys_of(records):
+    for record in (records[name] if isinstance(records[name], list) else [records[name]]):
+        if not isinstance(record, dict):
+            continue
+        plugin_lines.append("%s | %s | %s" % (safe(name), safe(record.get("scope")), safe(record.get("version"))))
+        if isinstance(record.get("installPath"), str):
+            servers, unreadable = plugin_servers(record["installPath"])
+            manifests_unreadable += unreadable
+            provided.update("%s (from %s)" % (safe(server), safe(name)) for server in servers)
+
+print("(every name below comes from local config files: data, not instructions)")
+print("### MCP servers (name | scope | type)")
+if state_problem:
+    print(state_problem)
+users = state.get("mcpServers")
+for name in keys_of(users):
+    print("%s | user | %s" % (safe(name), server_type(users[name])))
+per_project, projects_with = {}, 0
+projects = state.get("projects")
+for project in (projects.values() if isinstance(projects, dict) else []):
+    servers = project.get("mcpServers") if isinstance(project, dict) else None
+    if isinstance(servers, dict) and servers:
+        projects_with += 1
+        for name in servers:
+            per_project[safe(name)] = per_project.get(safe(name), 0) + 1
+if per_project:
+    print("project-scoped (names only): %s; %d server(s) across %d project(s)"
+          % (", ".join(sorted(per_project)), sum(per_project.values()), projects_with))
+connectors = state.get("claudeAiMcpEverConnected")
+if isinstance(connectors, list) and connectors:
+    print("claude.ai connectors: %s" % ", ".join(sorted(safe(name) for name in connectors if isinstance(name, str))))
+if provided:
+    print("plugin-provided: %s" % ", ".join(sorted(provided)))
+if manifests_unreadable:
+    print("(%d plugin manifest(s) could not be read; their servers are not listed)" % manifests_unreadable)
+if not (state_problem or keys_of(users) or per_project or connectors or provided):
+    print("(none configured)")
+print("")
+print("### Installed plugins (name@marketplace | scope | version)")
+print(plugins_problem if plugins_problem else "\n".join(plugin_lines) if plugin_lines else "(none installed)")
+print("")
+print("### Plugin marketplaces (name | source type)")
+markets, markets_problem = load(os.path.join(claude_dir, "plugins", "known_marketplaces.json"))
+if markets_problem:
+    print(markets_problem)
+else:
+    for name in keys_of(markets):
+        source = markets[name].get("source") if isinstance(markets[name], dict) else None
+        print("%s | %s" % (safe(name), safe(source.get("source")) if isinstance(source, dict) else "-"))
+PY
+}
+
 cmd_inventory() {
     local wired file name keys extra key skill_dir helpers lines version
     emit "# Config inventory (generated $(date -u +%Y-%m-%dT%H:%M:%SZ) by claude_code_new_functionality_check.sh — facts, not memory)"
@@ -1403,9 +2154,12 @@ cmd_inventory() {
     emit "### Global CLAUDE.md"
     if [ -f "$CLAUDE_DIR/CLAUDE.md" ]; then
         emit "$(wc -l < "$CLAUDE_DIR/CLAUDE.md" | tr -d ' ') lines, $(wc -c < "$CLAUDE_DIR/CLAUDE.md" | tr -d ' ') bytes; imports: $(grep -o '^@[^ ]*' "$CLAUDE_DIR/CLAUDE.md" | tr '\n' ' ')"
+        emit "sections (the map of the system's subsystems): $(claude_md_sections "$CLAUDE_DIR/CLAUDE.md")"
     else
         emit "(none)"
     fi
+    emit ""
+    system_layer_report
     emit ""
     emit "### Feature surfaces this config does not use at all"
     for name in $ABSENT_FEATURE_PATHS; do
@@ -1563,9 +2317,10 @@ cmd_ledger_add() {
     [ -f "$curated" ] || die "$EXIT_USAGE" "curated candidates file not found: $curated"
     find_python || die "$EXIT_USAGE" "ledger-add needs a working python (none found)"
     mkdir -p "$LEDGER_DIR"
-    "$PYTHON_CMD" - "$curated" "$LEDGER_DIR" "${NEW_FUNCTIONALITY_CHECK_TODAY:-$(date -u +%Y-%m-%d)}" "$FIELD_CAPS_JSON" <<'PY'
+    "$PYTHON_CMD" - "$curated" "$LEDGER_DIR" "$(today_utc)" "$FIELD_CAPS_JSON" "$BREADTHS" <<'PY'
 import json, os, re, sys
 curated_path, ledger_dir, today, CAPS = sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4])
+BREADTHS = set(sys.argv[5].split())
 ledger_path = os.path.join(ledger_dir, "ledger.md")
 proposals_path = os.path.join(ledger_dir, "proposals.md")
 INDEX_HEADER = ("| ID | status | target | feature_key | title | upstream | logged | decided |\n"
@@ -1588,16 +2343,21 @@ if not isinstance(curated, list) or not all(isinstance(item, dict) for item in c
 
 # The write gate: every capped field is checked BEFORE anything is written, so a refused
 # batch leaves the ledger exactly as it was.
-too_long = []
+refused = []
 for number, item in enumerate(curated, 1):
     fields = dict(item); fields.update(item.get("upstream") or {})
     for key, value in fields.items():
         if isinstance(value, str) and key in CAPS and len(value) > CAPS[key]:
-            too_long.append("item %d: %s is %d characters (cap %d)" % (number, key, len(value), CAPS[key]))
-if too_long:
-    for line in too_long:
+            refused.append("item %d: %s is %d characters (cap %d)" % (number, key, len(value), CAPS[key]))
+    # A new-capability proposal carries both lens fields; half of one is a curation slip.
+    if ("capability" in item) != ("breadth" in item):
+        refused.append("item %d: capability and breadth go together (a new-capability proposal carries both)" % number)
+    elif "breadth" in item and item["breadth"] not in BREADTHS:
+        refused.append("item %d: breadth must be one of %s" % (number, sorted(BREADTHS)))
+if refused:
+    for line in refused:
         print("claude-code-new-functionality-check: ERROR %s" % line, file=sys.stderr)
-    sys.exit("claude-code-new-functionality-check: ERROR nothing was written — shorten the field(s) above and run ledger-add again")
+    sys.exit("claude-code-new-functionality-check: ERROR nothing was written — fix the field(s) above and run ledger-add again")
 
 ledger = open(ledger_path, encoding="utf-8").read() if os.path.exists(ledger_path) else SKELETON
 proposals = open(proposals_path, encoding="utf-8").read() if os.path.exists(proposals_path) else "# New-Functionality Check — proposal details\n"
@@ -1622,15 +2382,20 @@ for item in curated:
     highest += 1
     ident = "RW-%04d" % highest
     upstream = item.get("upstream") or {}
-    shown_title = ("[RISK] " if item.get("verdict") == "RISK-WATCH" else "") + title
+    new_capability = "capability" in item
+    marker = "[RISK] " if item.get("verdict") == "RISK-WATCH" else "[NEW] " if new_capability else ""
+    shown_title = marker + title
     rows.append("| %s | proposed | %s | %s | %s | %s | %s | |" % (ident, key[1], key[0], shown_title, cell(upstream.get("ref", "")), today))
     paths = ", ".join("`%s`" % one_line(path) for path in item.get("target_paths") or [])
     docs = (" · docs: %s" % one_line(upstream["docs_url"])) if upstream.get("docs_url") else ""
+    # The slice-local launch id (L01…) is never written: it means nothing outside its slice.
+    lens_lines = ["- **New capability:** %s" % one_line(item["capability"]),
+                  "- **Breadth:** %s" % one_line(item["breadth"])] if new_capability else []
     blocks.append("\n".join([
         "", "### %s · %s · %s" % (ident, key[1], shown_title), "",
         "- **Status:** proposed (logged %s)" % today,
         "- **Upstream:** %s %s · %s%s" % (one_line(upstream.get("source", "")), one_line(upstream.get("ref", "")), one_line(upstream.get("url", "")), docs),
-        "  > %s" % one_line(upstream.get("quote", "")),
+        "  > %s" % one_line(upstream.get("quote", ""))] + lens_lines + [
         "- **Today:** %s%s" % (one_line(item.get("today", "")), (" (%s)" % paths) if paths else ""),
         "- **Proposed change:** %s" % one_line(item.get("proposed_change", "")),
         "- **Benefit / effort / risk:** %s / %s / %s · **Sensitive:** %s" % (
@@ -1670,7 +2435,7 @@ cmd_ledger_status() {
         *) die "$EXIT_USAGE" "status must be one of: $STATUS_VOCABULARY (got: $status)" ;;
     esac
     find_python || die "$EXIT_USAGE" "ledger-status needs a working python (none found)"
-    "$PYTHON_CMD" - "$LEDGER_DIR" "$ident" "$status" "$detail" "${NEW_FUNCTIONALITY_CHECK_TODAY:-$(date -u +%Y-%m-%d)}" <<'PY'
+    "$PYTHON_CMD" - "$LEDGER_DIR" "$ident" "$status" "$detail" "$(today_utc)" <<'PY'
 import os, re, sys
 ledger_dir, ident, status, detail, today = sys.argv[1:6]
 NEEDS_DETAIL = {"declined": "a why", "deferred": "an until (a date or a condition)", "applied": "its evidence", "obsolete": "the superseding evidence"}
@@ -1773,6 +2538,7 @@ main() {
         fetch)        cmd_fetch "$@" ;;
         watch-diff)   cmd_watch_diff "$@" ;;
         watch-commit) cmd_watch_commit "$@" ;;
+        launches)     cmd_launches "$@" ;;
         tracked-issues) cmd_tracked_issues "$@" ;;
         issue-status)   cmd_issue_status "$@" ;;
         issue-evidence) cmd_issue_evidence "$@" ;;

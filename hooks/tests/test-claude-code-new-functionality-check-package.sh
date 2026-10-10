@@ -123,18 +123,53 @@ cap_gaps() {
     shift 3
     for field in "$@"; do
         cap="$(grep -o "\"$field\": [0-9]*" "$helper" 2>/dev/null | head -1 | sed 's/.*: //')"
+        # The field must stand alone: "by_quote <= 300" does not state the cap of "quote".
         case "$cap" in
             ''|*[!0-9]*) printf ' %s:%s(no numeric cap in the helper)' "$label" "$field" ;;
-            *) grep -q -F -- "$field <= $cap" "$agent" 2>/dev/null || printf ' %s:%s<=%s' "$label" "$field" "$cap" ;;
+            *) grep -q -E -- "(^|[^A-Za-z0-9_])$field <= $cap([^0-9]|\$)" "$agent" 2>/dev/null || printf ' %s:%s<=%s' "$label" "$field" "$cap" ;;
         esac
     done
 }
-UNSTATED="$(cap_gaps "$HELPER" "$EVALUATOR" evaluator title feature_key quote today proposed_change verify_before_adopting reason_if_no_action slice)"
-UNSTATED="$UNSTATED$(cap_gaps "$HELPER" "$RESEARCHER" researcher title feature_key quote claim proposed_change by_quote)"
+EVALUATOR_FIELDS="title feature_key quote today proposed_change verify_before_adopting reason_if_no_action slice capability why url docs_url source ref version"
+RESEARCHER_FIELDS="title feature_key quote claim proposed_change by_quote url by_url reason"
+UNSTATED="$(cap_gaps "$HELPER" "$EVALUATOR" evaluator $EVALUATOR_FIELDS)"
+UNSTATED="$UNSTATED$(cap_gaps "$HELPER" "$RESEARCHER" researcher $RESEARCHER_FIELDS)"
 check "every validator length cap is stated in the agent file that writes the field" "" "$UNSTATED"
+# The two lists above are checked against the helper's caps table itself, so a new cap cannot be
+# added without saying which agent writes the field.
+UNASSIGNED=""
+for field in $(grep '^FIELD_CAPS_JSON=' "$HELPER" | grep -o '"[a-z_]*": [0-9]*' | sed 's/"\([a-z_]*\)".*/\1/'); do
+    case " $EVALUATOR_FIELDS $RESEARCHER_FIELDS " in *" $field "*) ;; *) UNASSIGNED="$UNASSIGNED $field" ;; esac
+done
+check "every capped field in the helper is assigned to the agent that writes it" "" "$UNASSIGNED"
 printf '{"titel": 160}\n' > "$SANDBOX/helper-caps-renamed.sh"
 check "the cap check fails when the helper's caps table yields no number" fails \
     "$(fails_or_passes "$(cap_gaps "$SANDBOX/helper-caps-renamed.sh" "$EVALUATOR" evaluator title)")"
+printf '{"quote": 300}\n' > "$SANDBOX/helper-caps-quote.sh"
+printf 'by_quote <= 300\n' > "$SANDBOX/agent-states-by-quote-only.md"
+check "the cap check fails when only a longer field name states the cap (by_quote is not quote)" fails \
+    "$(fails_or_passes "$(cap_gaps "$SANDBOX/helper-caps-quote.sh" "$SANDBOX/agent-states-by-quote-only.md" evaluator quote)")"
+printf 'quote <= 3000\n' > "$SANDBOX/agent-states-a-longer-cap.md"
+check "the cap check fails when only a longer number states the cap (3000 is not 300)" fails \
+    "$(fails_or_passes "$(cap_gaps "$SANDBOX/helper-caps-quote.sh" "$SANDBOX/agent-states-a-longer-cap.md" evaluator quote)")"
+
+# 6. The new-capability lens is wired end to end: the rubric defines it, the skill lists launches
+#    and checks completeness, and the evaluator is told to account for every launch.
+RUBRIC="$SKILL_DIR/resources/applicability-rubric.md"
+if grep -q -F '## The new-capability lens' "$RUBRIC" 2>/dev/null; then l1=yes; else l1=no; fi
+check "the rubric defines the new-capability lens" yes "$l1"
+if grep -q -F 'launches --record' "$SKILL" 2>/dev/null && grep -q -F -- '--launches' "$SKILL" 2>/dev/null; then l2=yes; else l2=no; fi
+check "SKILL.md lists launches, checks completeness (--launches) and records only validated results" yes "$l2"
+if grep -q -F 'dispositions' "$EVALUATOR" 2>/dev/null && grep -q -F 'LENS: new-capability' "$EVALUATOR" 2>/dev/null; then l3=yes; else l3=no; fi
+check "the evaluator is told to give every launch a disposition under LENS: new-capability" yes "$l3"
+# The lens's enums come from the helper; the evaluator must name every value the validator accepts.
+ENUM_GAPS=""
+for value in $(grep -E '^(BREADTHS|DISPOSITION_CLASSES)=' "$HELPER" | sed 's/^[A-Z_]*="\([^"]*\)".*/\1/'); do
+    grep -q -E -- "(^|[^a-z-])$value([^a-z-]|\$)" "$EVALUATOR" 2>/dev/null || ENUM_GAPS="$ENUM_GAPS $value"
+done
+check "the evaluator names every breadth and disposition class the validator accepts" "" "$ENUM_GAPS"
+if [ "$(grep -E -c '^(BREADTHS|DISPOSITION_CLASSES)=' "$HELPER")" = 2 ]; then e=found; else e=missing; fi
+check "the helper still defines both lens enums (the check above is not vacuous)" found "$e"
 
 echo "----"
 echo "claude-code-new-functionality-check-package: $PASS passed, $FAIL failed"

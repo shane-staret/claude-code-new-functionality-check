@@ -6,12 +6,14 @@
 # bounded retries (file:// fixtures, a refused localhost port for the transient
 # path, fallback chain, never clobbering a good cached copy), watched-page diffs,
 # release channels, upstream-issue tracking, the config inventory (no env values
-# leaked), and ledger bookkeeping (next-id, snapshot). Fixtures are generated
-# inline; no network is ever touched. bash-3.2-safe.
+# leaked; the system layer by name only), ledger bookkeeping (next-id, snapshot), and
+# the new-capability lens (launches, its seen-set, validate-candidates --launches,
+# [NEW] rows). Fixtures are generated inline; no network is ever touched. bash-3.2-safe.
 
 set -u
 HELPER="$(cd "$(dirname "$0")/../.." && pwd)/skills/claude-code-new-functionality-check/claude_code_new_functionality_check.sh"
 TMPDIR_T="$(mktemp -d /tmp/claude-code-new-functionality-check-helper-test.XXXXXX)"
+trap 'rm -rf "$TMPDIR_T"' EXIT
 CACHE="$TMPDIR_T/cache"
 LEDGER_DIR="$TMPDIR_T/ledger"
 FAKE_CLAUDE="$TMPDIR_T/dot-claude"
@@ -22,10 +24,14 @@ PASS=0
 FAIL=0
 
 h() {
-    # h [VAR=val ...] bash "$HELPER" <subcommand> [args...] — sandboxed environment.
-    env "NEW_FUNCTIONALITY_CHECK_CACHE_DIR=$CACHE" \
+    # h [VAR=val ...] bash "$HELPER" <subcommand> [args...] — sandboxed environment. The
+    # .claude.json the inventory reads is pinned to a fixture path (absent unless a case
+    # writes it), so no case can ever read the real file.
+    env -u CLAUDE_CONFIG_DIR \
+        "NEW_FUNCTIONALITY_CHECK_CACHE_DIR=$CACHE" \
         "CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR=$LEDGER_DIR" \
         "NEW_FUNCTIONALITY_CHECK_CLAUDE_DIR=$FAKE_CLAUDE" \
+        "NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON=$TMPDIR_T/no-claude.json" \
         "NEW_FUNCTIONALITY_CHECK_RETRY_BASE_SECS=0" "$@"
 }
 
@@ -1256,6 +1262,564 @@ check "the tarball landed in the quoted directory" "1" "$(ls "$BKQ"/claude_code_
 printf 'BACKUP_DIR=\n' > "$BK/backup.conf"
 OUT=$(k bash "$HELPER" backup 2>&1); RC=$?
 check "an empty BACKUP_DIR is refused, not treated as the current directory" "1" "$RC"
+
+# ---------------------------------------------------------------------------
+# launches: every brand-new capability, listed deterministically for the new-capability
+# lens. A weekly listing covers the last 60 days (older launches are reached only by a
+# catch-up window), so a record adds only its own slice's keys. The one baseline is the
+# docs pages, written by the first weekly record. Listing is read-only; only a VALIDATED,
+# complete, verified result is ever recorded, and only as .pending until watch-commit.
+# ---------------------------------------------------------------------------
+LC="$TMPDIR_T/launch-cache"; LL="$TMPDIR_T/launch-ledger"; mkdir -p "$LC/digests" "$LL"
+l() { h "NEW_FUNCTIONALITY_CHECK_CACHE_DIR=$LC" "CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR=$LL" "NEW_FUNCTIONALITY_CHECK_TODAY=2026-10-09" "$@"; }
+launch_count() { printf '%s\n' "$1" | grep -c -E '^L[0-9]+ \|'; }
+cat > "$LC/digests/2026-w34.md" <<'DIGEST'
+# Week 34 · August 17–21, 2026
+
+<div className="digest-meta">
+  <span>2 features · August 17–21</span>
+</div>
+
+<div className="digest-feature">
+  <div className="digest-feature-header">
+    <span className="digest-feature-title">/design</span>
+    <span className="digest-feature-pill">research preview</span>
+  </div>
+
+  <p className="digest-feature-lede">The <code>/design</code> skill brings an artboard workflow into the CLI, built on artifacts.</p>
+
+  <a className="digest-feature-link" href="/docs/en/artifacts#availability">Where artifacts are available</a>
+</div>
+
+<div className="digest-feature">
+  <div className="digest-feature-header">
+    <span className="digest-feature-title">Concise output style</span>
+  </div>
+
+  <p className="digest-feature-lede">The built-in Concise output style makes Claude lead with the result.</p>
+
+  <a className="digest-feature-link" href="https://evil.invalid/elsewhere">Elsewhere</a>
+</div>
+DIGEST
+cat > "$LC/digests/2026-w21.md" <<'DIGEST'
+# Week 21 · May 18–22, 2026
+
+<div className="digest-meta">
+  <span>1 feature · May 18–22</span>
+</div>
+
+<div className="digest-feature">
+  <div className="digest-feature-header">
+    <span className="digest-feature-title">Agent view</span>
+  </div>
+
+  <p className="digest-feature-lede">One place to manage every Claude Code session at once.</p>
+
+  <a className="digest-feature-link" href="/docs/en/agent-view">Agent view</a>
+</div>
+DIGEST
+cat > "$LC/support-release-notes.html" <<'NOTES'
+<html><body><article>
+<h2>October 2026</h2>
+<h3>October 7, 2026</h3>
+<p><b>Monthly credits for plans</b></p>
+<p>Plans now include monthly credits for running your own agents. For more information, see <a href="https://support.claude.com/en/articles/1">this article</a>.<script>window.scriptTextMustNotLeak = 1</script></p>
+<h2>September 2026</h2>
+<h3>September 16, 2026</h3>
+<p><b>Create designs, decks, and docs in any conversation</b></p>
+<p>You can now ask for a design, deck, or document in any conversation, including in Claude Code. See <a href="https://docs.anthropic.invalid/x">the docs</a> or <a href="/en/articles/2">the help article</a>.</p>
+<p> </p>
+<p><b>Build plugins for Claude</b></p>
+<p>You can now submit plugins to the Claude directory through a new developer portal, and read <b><a href="https://claude.com/blog/x">the post</a></b>.</p>
+<ul><li><p><b><a href="https://claude.com/plugins">Plugin directory</a></b></p></li><li><p>Usage analytics once a plugin is live.</p></li></ul>
+<h2>July 2026</h2>
+<h3>July 1, 2026</h3>
+<p><b>Access to a model restored</b><br/>We are restoring access to a model for every plan.</p>
+<h2>April 2026</h2>
+<h3>April 17, 2026</h3>
+<p><b>Claude Design by Anthropic Labs</b></p>
+<p>We launched Claude Design, a new product that lets you collaborate with Claude to create visual outputs.</p>
+</article></body></html>
+NOTES
+printf '# Claude Code Docs\n\n- [Hooks](https://code.claude.com/docs/en/hooks.md): hooks reference\n- [Week 37](https://code.claude.com/docs/en/whats-new/2026-w37.md): the weekly digest\n- [What is new](https://code.claude.com/docs/en/whats-new.md): the digest index\n- [Changelog](https://code.claude.com/docs/en/changelog.md): every change\n- [Hooks](https://code.claude.com/docs/en/hooks.md): hooks reference\n' > "$LC/llms.txt"
+
+OUT=$(l bash "$HELPER" launches); RC=$?
+check "launches: a first run exits 0" "0" "$RC"
+check_contains "launches: a first run says so" "first run" "$OUT"
+check "launches: a first run lists only the last 60 days (two digest features, three notes)" "5" "$(launch_count "$OUT")"
+check_contains "launches: a digest feature carries its week's Monday, its week and its pill" "| 2026-08-17 | whats-new 2026-w34 | /design (research preview)" "$OUT"
+check_contains "launches: a support-notes entry carries its date" "| 2026-09-16 | support-notes | Create designs, decks, and docs in any conversation" "$OUT"
+check_contains "launches: entry text is plain text (tags stripped)" "text: The /design skill brings an artboard workflow into the CLI, built on artifacts." "$OUT"
+check_contains "launches: a digest's relative link becomes an absolute docs_url" "docs_url: https://code.claude.com/docs/en/artifacts#availability" "$OUT"
+check_contains "launches: a relative support link becomes absolute" "docs_url: https://support.claude.com/en/articles/2" "$OUT"
+check_absent "launches: a link on a host outside the allowlist is never offered" "evil.invalid" "$OUT"
+check_absent "launches: ... nor a lookalike docs host" "docs.anthropic.invalid" "$OUT"
+check_contains "launches: each item names the official page its quotes are checked against" "url: https://support.claude.com/en/articles/12138966-release-notes" "$OUT"
+check_absent "launches: a launch older than the 60-day window is left for a catch-up" "Claude Design by Anthropic Labs" "$OUT"
+check_absent "launches: docs pages are a baseline on a first run, not launches" "hooks reference" "$OUT"
+check_absent "launches: a bold link inside an entry is not a title" "| the post" "$OUT"
+check_absent "launches: a bold paragraph inside a list item is not a title (no ghost entry)" "| Plugin directory" "$OUT"
+check_contains "launches: ... it stays part of its entry's text" "Plugin directory Usage analytics once a plugin is live." "$OUT"
+check "launches: no listed entry has an empty text" "0" "$(printf '%s\n' "$OUT" | grep -c -E '^    text: ?$')"
+check_absent "launches: script text inside an entry is never read" "scriptTextMustNotLeak" "$OUT"
+check_contains "launches: the slice carries a content hash" "slice-id " "$OUT"
+if ls "$LL/snapshots/launches-seen."* >/dev/null 2>&1; then x=written; else x=none; fi
+check "launches: listing is read-only (no seen-set is written)" none "$x"
+printf '%s\n' "$OUT" > "$TMPDIR_T/launches-1.md"
+
+# validate-candidates --launches: one disposition per launch, a PROPOSE per new capability, nothing omitted.
+lens_result() {
+    # lens_result <slice> <out.json> [<python statements mutating doc>] — a valid new-capability result for
+    # <slice>: its first launch is a new capability with one PROPOSE, every other launch is no-fit.
+    python3 - "$1" "$2" "${3:-}" <<'PYRES'
+import json, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+slice_id = re.search(r"slice-id ([0-9a-f]{12})", text).group(1)
+ids = re.findall(r"^(L[0-9]+) \|", text, re.M)
+quote = re.search(r"^    text: (.{40})", text, re.M).group(1)
+doc = {"header": {"slice": "launches slice-id %s" % slice_id, "items_reviewed": len(ids), "omitted_count": 0,
+                  "lens": "new-capability",
+                  "dispositions": [{"launch": ids[0], "class": "new-capability", "why": "a new extension point the config lacks"}]
+                                  + [{"launch": other, "class": "no-fit", "why": "serves the application layer only"} for other in ids[1:]]},
+       "candidates": [{"verdict": "PROPOSE", "title": "Pilot the first launch", "feature_key": "launch.first", "target_type": "skill",
+                       "launch": ids[0], "capability": "Draft several UI options as artboards before building one.", "breadth": "several",
+                       "upstream": {"source": "whats-new", "ref": "2026-w34", "url": "https://code.claude.com/docs/en/whats-new/2026-w34", "quote": quote},
+                       "today": "No skill drafts UI options before implementation.", "proposed_change": "Try it on one page; success is a picked option built in a day.",
+                       "benefit": "M", "effort": "S", "risk": "low", "sensitive": False, "verify_before_adopting": "Check plan availability."}]}
+exec(sys.argv[3])
+json.dump(doc, open(sys.argv[2], "w"))
+PYRES
+}
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-good.json"
+OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-good.json" --launches "$TMPDIR_T/launches-1.md"); RC=$?
+check "lens: a complete new-capability result validates" "0" "$RC"
+check_contains "lens: the summary counts the dispositions" "1 new-capability, 0 iteration, 4 no-fit" "$OUT"
+h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-good.json" >/dev/null 2>&1
+check "lens: lens output is rejected without --launches (iteration mode stays strict)" "1" "$?"
+python3 - "$TMPDIR_T/eval-good.json" "$TMPDIR_T/eval-lensfields.json" <<'MUTATE'
+import json, sys
+doc = json.load(open(sys.argv[1])); doc["candidates"][0].update({"capability": "x", "breadth": "one", "launch": "L01"})
+json.dump(doc, open(sys.argv[2], "w"))
+MUTATE
+h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/eval-lensfields.json" >/dev/null 2>&1
+check "lens: lens fields on an iteration candidate are rejected without --launches" "1" "$?"
+# The typo case uses a result that is VALID in iteration mode, so only the flag check can refuse it.
+OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/eval-good.json" --launch "$TMPDIR_T/launches-1.md" 2>&1); RC=$?
+check "lens: a mistyped flag is a usage error, never a skipped check" "1" "$RC"
+check_contains "lens: ... and the error names the argument" "unknown argument '--launch'" "$OUT"
+h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-good.json" --launches >/dev/null 2>&1
+check "lens: --launches without a slice file is a usage error" "1" "$?"
+h bash "$HELPER" validate-candidates researcher "$TMPDIR_T/research-good.json" --launches "$TMPDIR_T/launches-1.md" >/dev/null 2>&1
+check "lens: --launches belongs to the evaluator only" "1" "$?"
+h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/eval-good.json" --launches "$TMPDIR_T/launches-1.md" >/dev/null 2>&1
+check "lens: an iteration result is not a lens result" "1" "$?"
+lensbad() { # lensbad <name> <python statements> — the mutated lens result must be rejected
+    rm -f "$TMPDIR_T/lens-bad.json"
+    if ! lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-bad.json" "$2"; then
+        check "lens rejects: $1 (the mutation itself ran)" "ran" "the generator failed"; return
+    fi
+    OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-bad.json" --launches "$TMPDIR_T/launches-1.md" 2>&1); RC=$?
+    check "lens rejects: $1" "1" "$RC"
+    check_contains "lens rejects: $1 (as INVALID, not by crashing)" "INVALID" "$OUT"
+}
+lensbad "a launch with no disposition"                  'doc["header"]["dispositions"].pop()'
+lensbad "a disposition for a launch not in the slice"   'doc["header"]["dispositions"].append({"launch": "L99", "class": "no-fit", "why": "a launch the slice never listed"})'
+lensbad "two dispositions for one launch"               'doc["header"]["dispositions"].append(dict(doc["header"]["dispositions"][1]))'
+lensbad "an unknown disposition class"                  'doc["header"]["dispositions"][1]["class"] = "maybe"'
+lensbad "a disposition without a reason"                'doc["header"]["dispositions"][1]["why"] = ""'
+lensbad "an unknown field in a disposition"             'doc["header"]["dispositions"][1]["run"] = "x"'
+lensbad "a new capability with no proposal"             'doc["candidates"] = []'
+lensbad "a proposal for a launch judged no-fit"         'extra = dict(doc["candidates"][0]); extra["feature_key"] = "launch.second"; extra["launch"] = doc["header"]["dispositions"][1]["launch"]; doc["candidates"].append(extra)'
+lensbad "a proposal that names no launch"               'del doc["candidates"][0]["launch"]'
+lensbad "a proposal without its capability"             'del doc["candidates"][0]["capability"]'
+lensbad "an unknown breadth"                            'doc["candidates"][0]["breadth"] = "huge"'
+lensbad "a NO-ACTION candidate (no-fit lives in the dispositions)" 'doc["candidates"][0]["verdict"] = "NO-ACTION"; doc["candidates"][0]["reason_if_no_action"] = "no fit after all"'
+lensbad "a result for another slice (wrong slice-id)"   'doc["header"]["slice"] = "launches slice-id 000000000000"'
+lensbad "items_reviewed that is not the slice size"     'doc["header"]["items_reviewed"] = 4'
+lensbad "launches judged not worth a word (omitted_count above 0)" 'doc["header"]["omitted_count"] = 1'
+lensbad "a header without the lens"                     'del doc["header"]["lens"]'
+lensbad "an over-long capability (more than twice its cap)" 'doc["candidates"][0]["capability"] = "x" * 1300'
+lensbad "a reason that is only a stub"                  'doc["header"]["dispositions"][1]["why"] = "n/a"'
+lensbad "two proposals for one new capability"          'extra = dict(doc["candidates"][0]); extra["feature_key"] = "launch.again"; doc["candidates"].append(extra)'
+lensbad "a proposal for a launch judged an iteration"   'doc["header"]["dispositions"][1]["class"] = "iteration"; extra = dict(doc["candidates"][0]); extra["feature_key"] = "launch.iter"; extra["launch"] = doc["header"]["dispositions"][1]["launch"]; doc["candidates"].append(extra)'
+lensbad "a list where a class belongs (refused cleanly, not a crash)" 'doc["header"]["dispositions"][1]["class"] = ["no-fit"]'
+lensbad "a list where a launch id belongs"              'doc["header"]["dispositions"][1]["launch"] = ["L02"]'
+lensbad "a list where a breadth belongs"                'doc["candidates"][0]["breadth"] = ["one"]'
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-crash.json" 'doc["header"]["dispositions"][1]["class"] = ["no-fit"]'
+OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-crash.json" --launches "$TMPDIR_T/launches-1.md" 2>&1)
+check_absent "lens: a malformed value is reported as INVALID, never as a traceback" "Traceback" "$OUT"
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-iteration.json" 'doc["header"]["dispositions"][1]["class"] = "iteration"'
+OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-iteration.json" --launches "$TMPDIR_T/launches-1.md"); RC=$?
+check "lens: an iteration disposition needs no proposal" "0" "$RC"
+check_contains "lens: ... and is counted as one" "1 new-capability, 1 iteration, 3 no-fit" "$OUT"
+# A result that is VALID in iteration mode, so only the flag check can refuse an empty --launches.
+OUT=$(h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/eval-good.json" --launches "" 2>&1); RC=$?
+check "lens: an empty --launches value is a usage error, never a skipped check" "1" "$RC"
+check_contains "lens: ... in its own words" "--launches needs the slice file" "$OUT"
+sed 's/an artboard workflow/a canvas workflow/' "$TMPDIR_T/launches-1.md" > "$TMPDIR_T/launches-tampered.md"
+h bash "$HELPER" validate-candidates evaluator "$TMPDIR_T/lens-good.json" --launches "$TMPDIR_T/launches-tampered.md" >/dev/null 2>&1
+check "lens rejects: a slice edited after it was listed (its hash no longer matches)" "1" "$?"
+
+# verify-candidates: a lens proposal quotes the slice; an iteration result never pairs with a launches slice.
+h bash "$HELPER" verify-candidates "$TMPDIR_T/lens-good.json" "$TMPDIR_T/launches-1.md" >/dev/null 2>&1
+check "lens: a lens proposal's quote verifies against the launches slice" "0" "$?"
+OUT=$(h bash "$HELPER" verify-candidates "$TMPDIR_T/batch-good.json" "$TMPDIR_T/launches-1.md" 2>&1); RC=$?
+check "lens: verify-candidates refuses a launches slice paired with a non-lens result" "1" "$RC"
+check_contains "lens: ... and says why" "launches slice" "$OUT"
+# A lens proposal's quote must come from ITS OWN launch row: not another row, not the slice's header.
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-otherrow.json" 'doc["candidates"][0]["upstream"]["quote"] = re.search(r"^    text: (.{40})", text.split("\nL02 |", 1)[1], re.M).group(1)'
+h bash "$HELPER" verify-candidates "$TMPDIR_T/lens-otherrow.json" "$TMPDIR_T/launches-1.md" >/dev/null 2>&1
+check "lens: a quote taken from another launch's row does not verify" "1" "$?"
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-header.json" 'doc["candidates"][0]["upstream"]["quote"] = "listed 2026-10-09 by claude_code_new_functionality_check.sh launches"'
+h bash "$HELPER" verify-candidates "$TMPDIR_T/lens-header.json" "$TMPDIR_T/launches-1.md" >/dev/null 2>&1
+check "lens: a quote taken from the slice's header does not verify" "1" "$?"
+
+# --record: only a complete result for THIS slice reaches the seen-set, and only as .pending.
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-incomplete.json" 'doc["header"]["dispositions"].pop()'
+l bash "$HELPER" launches --record "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-incomplete.json" >/dev/null 2>&1
+check "record: an incomplete result is refused" "1" "$?"
+lens_result "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-other-slice.json" 'doc["header"]["slice"] = "launches slice-id 000000000000"'
+l bash "$HELPER" launches --record "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-other-slice.json" >/dev/null 2>&1
+check "record: a result for another slice is refused" "1" "$?"
+OUT=$(l bash "$HELPER" launches --record "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-otherrow.json" 2>&1); RC=$?
+check "record: a result whose proposal quote does not verify is refused" "1" "$RC"
+check_contains "record: ... in its own words" "quote" "$OUT"
+python3 - "$TMPDIR_T/launches-1.md" "$TMPDIR_T/launches-forged.md" <<'FORGE'
+import hashlib, re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+start = re.search(r"^L[0-9]+ \|", text, re.M).start()
+head, body = text[:start], text[start:]
+body = body.replace("    key: digest|2026-w34|/design\n", "    key: digest|2026-w34|/design\n    key: support|2026-01-01|smuggled launch\n", 1)
+head = re.sub(r"slice-id [0-9a-f]{12}", "slice-id " + hashlib.sha256(body.encode("utf-8")).hexdigest()[:12], head)
+open(sys.argv[2], "w", encoding="utf-8").write(head + body)
+FORGE
+lens_result "$TMPDIR_T/launches-forged.md" "$TMPDIR_T/lens-forged.json"
+OUT=$(l bash "$HELPER" launches --record "$TMPDIR_T/launches-forged.md" "$TMPDIR_T/lens-forged.json" 2>&1); RC=$?
+check "record: a slice with more keys than launches is refused" "1" "$RC"
+check_contains "record: ... in its own words" "key line" "$OUT"
+if ls "$LL/snapshots/launches-seen."* >/dev/null 2>&1; then x=written; else x=none; fi
+check "record: a refused result writes nothing (a failed lane is never marked seen)" none "$x"
+OUT=$(l bash "$HELPER" launches --record "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-good.json"); RC=$?
+check "record: a complete result is recorded" "0" "$RC"
+check_contains "record: it names the step that makes the record final" "watch-commit launches-seen" "$OUT"
+PENDING="$(cat "$LL/snapshots/launches-seen.pending" 2>/dev/null)"
+check_contains "record: a judged launch is in the pending seen-set" "support|2026-09-16|build plugins for claude" "$PENDING"
+check_absent "record: an older launch is never marked seen (only a catch-up judges it)" "claude design by anthropic labs" "$PENDING"
+check_contains "record: the first record baselines every docs page" "docs|https://code.claude.com/docs/en/hooks.md" "$PENDING"
+check_absent "record: digest pages in the docs index are never docs launches" "whats-new/2026-w37" "$PENDING"
+check_absent "record: ... nor the digest index" "whats-new.md" "$PENDING"
+check_absent "record: ... nor the changelog" "changelog.md" "$PENDING"
+if [ -f "$LL/snapshots/launches-seen.txt" ]; then x=committed; else x=pending; fi
+check "record: nothing is final before watch-commit" pending "$x"
+OUT=$(l bash "$HELPER" launches)
+check "record: an uncommitted record changes nothing a listing sees" "5" "$(launch_count "$OUT")"
+
+# Two records before one watch-commit (a catch-up of several windows): the second merges into the
+# uncommitted .pending, so the first slice's keys survive.
+OUT=$(l bash "$HELPER" launches --since 2026-04-01 --until 2026-05-31); printf '%s\n' "$OUT" > "$TMPDIR_T/launches-cu.md"
+lens_result "$TMPDIR_T/launches-cu.md" "$TMPDIR_T/lens-cu.json"
+l bash "$HELPER" launches --record "$TMPDIR_T/launches-cu.md" "$TMPDIR_T/lens-cu.json" >/dev/null
+PENDING="$(cat "$LL/snapshots/launches-seen.pending" 2>/dev/null)"
+check_contains "record: a second record keeps the first slice's keys in .pending" "support|2026-09-16|build plugins for claude" "$PENDING"
+check_contains "record: ... adds its own" "support|2026-04-17|claude design by anthropic labs" "$PENDING"
+check_contains "record: ... and keeps the docs baseline" "docs|https://code.claude.com/docs/en/hooks.md" "$PENDING"
+
+# watch-commit <name>: a catch-up promotes ONLY its own seen-set, never a crashed sweep's page diffs.
+printf 'stale page diff\n' > "$LL/snapshots/docs-index.pending"
+OUT=$(l bash "$HELPER" watch-commit launches-seen)
+check_contains "watch-commit <name> promotes the named snapshot" "committed snapshot: launches-seen" "$OUT"
+if [ -f "$LL/snapshots/docs-index.pending" ]; then x=still-pending; else x=promoted; fi
+check "watch-commit <name> leaves every other pending snapshot alone" still-pending "$x"
+l bash "$HELPER" watch-commit '../escape' >/dev/null 2>&1
+check "watch-commit refuses a name that is not a plain snapshot name" "1" "$?"
+OUT=$(l bash "$HELPER" watch-commit launches-sen 2>&1); RC=$?
+check "watch-commit refuses a mistyped snapshot name (a typo never reads as 'nothing pending')" "1" "$RC"
+check_contains "watch-commit: ... and names the snapshots it keeps" "launches-seen" "$OUT"
+OUT=$(l bash "$HELPER" watch-commit launches-seen)
+check_contains "watch-commit <name> with nothing pending says so" "nothing pending" "$OUT"
+rm -f "$LL/snapshots/docs-index.pending"
+
+OUT=$(l bash "$HELPER" launches); RC=$?
+check "launches: after a committed record a later run exits 0" "0" "$RC"
+check "launches: ... and lists nothing judged or baselined" "0" "$(launch_count "$OUT")"
+check_contains "launches: ... and says so" "no unseen launches" "$OUT"
+
+# Later runs: new docs pages (one listed twice, one off the allowlist), a note back-dated onto a
+# date already covered, and a re-titled entry.
+printf -- '- [Mods](https://code.claude.com/docs/en/mods.md): small functions that change how Claude Code works\n- [Mods](https://code.claude.com/docs/en/mods.md): small functions that change how Claude Code works\n- [Elsewhere](https://evil.invalid/elsewhere.md): a page on another host\n' >> "$LC/llms.txt"
+python3 - "$LC/support-release-notes.html" <<'EDIT'
+import sys
+path = sys.argv[1]; text = open(path, encoding="utf-8").read()
+text = text.replace('<p><b>Monthly credits for plans</b></p>', '<p><b>A new connector type</b></p>\n<p>Connectors can now push events into a session.</p>\n<p><b>Monthly credits for plans</b></p>')
+text = text.replace('Build plugins for Claude', 'Build and list plugins for Claude')
+open(path, "w", encoding="utf-8").write(text)
+EDIT
+OUT=$(l bash "$HELPER" launches)
+check "launches: a later run lists exactly the unseen launches" "4" "$(launch_count "$OUT")"
+check_contains "launches: a new docs page is listed (keyed by URL)" "Mods" "$OUT"
+check "launches: a page listed twice in the index is one launch" "1" "$(printf '%s\n' "$OUT" | grep -c -E '^L[0-9]+ \|.*\| Mods$')"
+check_absent "launches: a docs page on a host outside the allowlist gets no docs_url" "docs_url: https://evil.invalid" "$OUT"
+check_contains "launches: a note back-dated onto a covered date is still caught" "A new connector type" "$OUT"
+check_contains "launches: a changed title is flagged as possibly re-titled" "possibly re-titled" "$OUT"
+check "launches: ... and only that one is flagged" "1" "$(printf '%s\n' "$OUT" | grep -c 'possibly re-titled')"
+printf '%s\n' "$OUT" > "$TMPDIR_T/launches-2.md"
+lens_result "$TMPDIR_T/launches-2.md" "$TMPDIR_T/lens-2.json"
+l bash "$HELPER" launches --record "$TMPDIR_T/launches-2.md" "$TMPDIR_T/lens-2.json" >/dev/null
+l bash "$HELPER" watch-commit launches-seen >/dev/null
+OUT=$(l bash "$HELPER" launches)
+check "launches: after a second record a third run lists nothing (records merge, never replace)" "0" "$(launch_count "$OUT")"
+
+# Catch-up: a dated window, whatever the seen-set says; docs pages (undated) are never in one.
+OUT=$(l bash "$HELPER" launches --since 2026-04-01 --until 2026-05-31); RC=$?
+check "catch-up: a window exits 0" "0" "$RC"
+check "catch-up: it lists the dated launches in its window, seen or not" "2" "$(launch_count "$OUT")"
+check_contains "catch-up: an old launch is judged again" "Claude Design by Anthropic Labs" "$OUT"
+check_contains "catch-up: a digest feature is dated by the Monday of its week" "| 2026-05-18 | whats-new 2026-w21 | Agent view" "$OUT"
+check_contains "catch-up: a singular '1 feature' digest is read" "One place to manage every Claude Code session" "$OUT"
+OUT=$(l bash "$HELPER" launches --since 2026-07-01 --until 2026-07-01)
+check_contains "catch-up: the window is inclusive" "Access to a model restored" "$OUT"
+check_contains "catch-up: an inline title (bold, then a line break) is parsed" "text: We are restoring access to a model for every plan." "$OUT"
+check_absent "catch-up: undated docs pages are never part of a window" "Mods" "$(l bash "$HELPER" launches --since 2026-01-01 --until 2026-12-31)"
+l "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX=1" bash "$HELPER" launches --since 2026-04-01 --until 2026-05-31 >/dev/null 2>&1
+check "catch-up: a window over the slice cap is refused (split it)" "1" "$?"
+l bash "$HELPER" launches --since 2026-13-40 >/dev/null 2>&1
+check "launches: an impossible date is a usage error" "1" "$?"
+l bash "$HELPER" launches --since 2026-10-01 --until 2026-09-01 >/dev/null 2>&1
+check "launches: a window that ends before it starts is a usage error" "1" "$?"
+l bash "$HELPER" launches --sinse 2026-10-01 >/dev/null 2>&1
+check "launches: an unknown flag is a usage error" "1" "$?"
+OUT=$(l bash "$HELPER" launches --record "$TMPDIR_T/no-such-slice.md" "$TMPDIR_T/lens-good.json" 2>&1); RC=$?
+check "launches: --record needs an existing slice" "1" "$RC"
+check_contains "launches: ... in its own words" "launches slice not found" "$OUT"
+OUT=$(l bash "$HELPER" launches --until 2026-09-01 2>&1); RC=$?
+check "launches: --until without --since is a usage error" "1" "$RC"
+check_contains "launches: ... in its own words" "--until needs --since" "$OUT"
+OUT=$(l bash "$HELPER" launches --record "$TMPDIR_T/launches-1.md" "$TMPDIR_T/lens-good.json" --since 2026-01-01 2>&1); RC=$?
+check "launches: --record takes no window" "1" "$RC"
+check_contains "launches: ... in its own words" "takes no window" "$OUT"
+OUT=$(l bash "$HELPER" launches --since 2026-10-01)
+check "launches: --since alone ends today" "2" "$(launch_count "$OUT")"
+OUT=$(l bash "$HELPER" launches --since '' 2>&1); RC=$?
+check "launches: an empty --since is a usage error, never a weekly listing" "1" "$RC"
+OUT=$(l "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX=abc" bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a knob that is not a number is a usage error" "1" "$RC"
+check_contains "launches: ... and the error names the knob" "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX" "$OUT"
+
+# Flood guard: more unseen launches than one slice holds means a key or a format changed (or the
+# docs index was reorganized). The listing stops and names both ways out.
+python3 - "$LC/support-release-notes.html" <<'EDIT'
+import sys
+path = sys.argv[1]; text = open(path, encoding="utf-8").read()
+text = text.replace('<h3>October 7, 2026</h3>', '<h3>October 8, 2026</h3>\n<p><b>Dashboards in beta</b></p>\n<p>Dashboards are now in beta on every plan.</p>\n<h3>October 7, 2026</h3>')
+open(path, "w", encoding="utf-8").write(text)
+EDIT
+OUT=$(l "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX=0" bash "$HELPER" launches 2>&1); RC=$?
+check "flood guard: more unseen launches than one slice holds exits 3" "3" "$RC"
+check_contains "flood guard: it points at a catch-up" "--since" "$OUT"
+OUT=$(l bash "$HELPER" launches)
+check "flood guard: under the limit the one new launch is listed" "1" "$(launch_count "$OUT")"
+printf -- '- [Page one](https://code.claude.com/docs/en/p1.md): one\n- [Page two](https://code.claude.com/docs/en/p2.md): two\n- [Page three](https://code.claude.com/docs/en/p3.md): three\n' >> "$LC/llms.txt"
+OUT=$(l "NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX=2" bash "$HELPER" launches 2>&1); RC=$?
+check "flood guard: a flood of new docs pages exits 3" "3" "$RC"
+check_contains "flood guard: ... and offers --rebaseline-docs" "--rebaseline-docs" "$OUT"
+OUT=$(l bash "$HELPER" launches --rebaseline-docs); RC=$?
+check "rebaseline-docs: exits 0" "0" "$RC"
+check_contains "rebaseline-docs: it names the step that makes it final" "watch-commit launches-seen" "$OUT"
+l bash "$HELPER" watch-commit launches-seen >/dev/null
+OUT=$(l bash "$HELPER" launches)
+check "rebaseline-docs: afterwards only the dated launch is listed" "1" "$(launch_count "$OUT")"
+check_absent "rebaseline-docs: ... the docs pages are the new baseline" "Page one" "$OUT"
+mv "$LC/llms.txt" "$LC/llms.moved"
+OUT=$(l bash "$HELPER" launches --rebaseline-docs 2>&1); RC=$?
+check "rebaseline-docs: refused while the docs index is missing (never an empty baseline)" "2" "$RC"
+check_contains "rebaseline-docs: ... in its own words" "nothing rebaselined" "$OUT"
+mv -f "$LC/llms.moved" "$LC/llms.txt"
+
+# Format drift is LOUD (exit 3), never "nothing new"; a missing source is partial (exit 2), never silent.
+DC="$TMPDIR_T/drift-cache"; mkdir -p "$DC/digests"; cp "$LC/support-release-notes.html" "$LC/llms.txt" "$DC/"
+ld() { h "NEW_FUNCTIONALITY_CHECK_CACHE_DIR=$DC" "CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR=$TMPDIR_T/drift-ledger" "NEW_FUNCTIONALITY_CHECK_TODAY=2026-10-09" "$@"; }
+sed 's/2 features/3 features/' "$LC/digests/2026-w34.md" > "$DC/digests/2026-w34.md"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a digest whose features disagree with its own count exits 3" "3" "$RC"
+check_contains "drift: ... and names the digest" "2026-w34" "$OUT"
+# A slice listed with format drift is never recorded: its parser was not trustworthy.
+ld bash "$HELPER" launches > "$TMPDIR_T/launches-drift.md" 2>/dev/null
+lens_result "$TMPDIR_T/launches-drift.md" "$TMPDIR_T/lens-drift.json"
+OUT=$(ld bash "$HELPER" launches --record "$TMPDIR_T/launches-drift.md" "$TMPDIR_T/lens-drift.json" 2>&1); RC=$?
+check "record: a slice listed with format drift is never recorded" "3" "$RC"
+check_contains "record: ... in its own words" "format drift" "$OUT"
+cp "$LC/digests/2026-w34.md" "$DC/digests/2026-w34.md"
+python3 - "$DC/support-release-notes.html" <<'EDIT'
+import sys
+path = sys.argv[1]; text = open(path, encoding="utf-8").read()
+text = text.replace('<h3>September 16, 2026</h3>', '<h3>September 16, 2026</h3>\n<p>Stray text before the first title.</p>')
+open(path, "w", encoding="utf-8").write(text)
+EDIT
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: text before a date's first title exits 3" "3" "$RC"
+check_contains "drift: ... named as the support notes" "support notes: text before the first title" "$OUT"
+printf '<html><body><p>No dates here at all.</p></body></html>\n' > "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a notes page with no dated entry exits 3" "3" "$RC"
+check_contains "drift: ... named as the support notes" "support notes: no dated entry" "$OUT"
+printf '<html><body><h2>October 2026</h2><h3>Coming soon</h3><p><b>x</b></p></body></html>\n' > "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a date heading that is not a date exits 3" "3" "$RC"
+check_contains "drift: ... named as the support notes" "is not a date" "$OUT"
+printf '<html><body><h2>October 2026</h2><h3>October 1, 2026</h3><p><b>A title with nothing under it</b></p></body></html>\n' > "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: an entry with no text exits 3 (never an empty launch)" "3" "$RC"
+check_contains "drift: ... named as the support notes" "has no text" "$OUT"
+rm -f "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a missing notes page exits 2 (partial), never silent" "2" "$RC"
+check_contains "launches: ... the slice header names the source" "SKIPPED: support notes" "$OUT"
+check_contains "launches: ... and the other sources are still listed" "/design" "$OUT"
+printf '<html><body><h2>October 2026</h2><h3>October 1, 2026</h3><p><b>Last entry</b></p><p>Trailing text that is never closed &amp' > "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a page that ends mid-paragraph keeps its last text (the parser is flushed)" "0" "$RC"
+check_contains "launches: ... the last entry has its text" "text: Trailing text that is never closed" "$OUT"
+: > "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a zero-byte notes page is a missing source too" "2" "$RC"
+check_contains "launches: ... named" "SKIPPED: support notes" "$OUT"
+cp "$LC/support-release-notes.html" "$DC/support-release-notes.html"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift control: the restored cache lists cleanly" "0" "$RC"
+mv "$DC/llms.txt" "$DC/llms.moved"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a missing docs index exits 2" "2" "$RC"
+check_contains "launches: ... named" "SKIPPED: docs index" "$OUT"
+printf '# Docs\n\nno page lines here\n' > "$DC/llms.txt"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a docs index with no page entries exits 3" "3" "$RC"
+check_contains "drift: ... named" "docs index: no page entries" "$OUT"
+mv -f "$DC/llms.moved" "$DC/llms.txt"
+cp "$DC/digests/2026-w34.md" "$DC/digests/2026-w99.md"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a digest named for a week that does not exist exits 3" "3" "$RC"
+check_contains "drift: ... named" "2026-w99" "$OUT"
+rm -f "$DC/digests/2026-w99.md"
+sed 's/className="digest-feature-lede"/className="digest-feature-summary"/' "$LC/digests/2026-w34.md" > "$DC/digests/2026-w34.md"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "drift: a digest feature without a lede exits 3" "3" "$RC"
+check_contains "drift: ... named" "without a title or a lede" "$OUT"
+cp "$LC/digests/2026-w34.md" "$DC/digests/2026-w34.md"
+mv "$DC/digests" "$DC/digests.moved"
+OUT=$(ld bash "$HELPER" launches 2>&1); RC=$?
+check "launches: a missing digests folder exits 2" "2" "$RC"
+check_contains "launches: ... named" "SKIPPED: digests" "$OUT"
+mv "$DC/digests.moved" "$DC/digests"
+
+# ledger-add renders a new-capability proposal: [NEW] in its row, its capability and breadth in its block,
+# and never the slice-local launch id. The two lens fields travel together or not at all.
+LN="$TMPDIR_T/newcap-ledger"; mkdir -p "$LN"
+nc() { h "CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR=$LN" "NEW_FUNCTIONALITY_CHECK_TODAY=2026-10-09" "$@"; }
+python3 - "$TMPDIR_T/lens-good.json" "$TMPDIR_T/curated-newcap.json" <<'MUTATE'
+import json, sys
+json.dump(json.load(open(sys.argv[1]))["candidates"], open(sys.argv[2], "w"))
+MUTATE
+OUT=$(nc bash "$HELPER" ledger-add "$TMPDIR_T/curated-newcap.json"); RC=$?
+check "ledger-add: a new-capability proposal is written" "0" "$RC"
+check_contains "ledger-add: its row is marked [NEW]" "| RW-0001 | proposed | skill | launch.first | [NEW] Pilot the first launch" "$(cat "$LN/ledger.md")"
+check_contains "ledger-add: its block states the new capability" "- **New capability:** Draft several UI options as artboards before building one." "$(cat "$LN/proposals.md")"
+check_contains "ledger-add: its block states the breadth" "- **Breadth:** several" "$(cat "$LN/proposals.md")"
+check_absent "ledger-add: the slice-local launch id never reaches the ledger" "L01" "$(cat "$LN/ledger.md" "$LN/proposals.md")"
+nc bash "$HELPER" ledger-check >/dev/null 2>&1
+check "ledger-add: a ledger with a [NEW] row passes ledger-check" "0" "$?"
+newcap_refused() { # newcap_refused <name> <python statements on the item list> <the refusal's own words>
+    python3 - "$TMPDIR_T/curated-newcap.json" "$TMPDIR_T/curated-newcap-bad.json" "$2" <<'MUTATE'
+import json, sys
+items = json.load(open(sys.argv[1])); items[0]["feature_key"] = "launch.other"
+exec(sys.argv[3])
+json.dump(items, open(sys.argv[2], "w"))
+MUTATE
+    BEFORE="$(cat "$LN/ledger.md" "$LN/proposals.md")"
+    OUT=$(nc bash "$HELPER" ledger-add "$TMPDIR_T/curated-newcap-bad.json" 2>&1); RC=$?
+    check "ledger-add refuses: $1" "1" "$RC"
+    check_contains "ledger-add refuses: $1 (in its own words, not by crashing)" "$3" "$OUT"
+    check "ledger-add refuses: $1 (and writes nothing to either file)" "$BEFORE" "$(cat "$LN/ledger.md" "$LN/proposals.md")"
+}
+newcap_refused "a capability without its breadth" 'del items[0]["breadth"]'           "capability and breadth go together"
+newcap_refused "a breadth without its capability" 'del items[0]["capability"]'        "capability and breadth go together"
+newcap_refused "an unknown breadth"               'items[0]["breadth"] = "everything"' "breadth must be one of"
+newcap_refused "a capability over its cap"        'items[0]["capability"] = "x" * 601'  "capability is 601 characters"
+
+# inventory: the rest of the system layer (MCP servers: configured, claude.ai connectors and
+# plugin-provided; installed plugins; marketplaces; the CLAUDE.md section map), by NAME only.
+# Every value in the fixtures is a canary that must never appear.
+FC2="$TMPDIR_T/dot-claude-2"; INSTALL_DIR="$FC2/plugins/cache/sp/CANARYINSTALL"; mkdir -p "$INSTALL_DIR"
+printf '# Global\n\n## Stop hook pipeline\n\ntext\n\n## Release currency\n\ntext\n' > "$FC2/CLAUDE.md"
+cat > "$TMPDIR_T/claude-2.json" <<'JSON'
+{"oauthAccount": {"emailAddress": "canary-owner@example.org"},
+ "mcpServers": {
+   "alpha": {"type": "http", "url": "https://mcp.example.org/x?key=CANARYQUERY", "headersHelper": "/opt/CANARYHELPER.sh", "headers": {"X-Key": "CANARYHEADER"}},
+   "beta": {"command": "CANARYCOMMAND", "args": ["--token", "CANARYARG"], "env": {"SOME_KEY": "CANARYENV"}}},
+ "claudeAiMcpEverConnected": ["Gmail", "Google Drive"],
+ "projects": {"/work/CANARYPROJECT": {"mcpServers": {"gamma": {"type": "sse", "url": "https://x.example.org/CANARYPURL"}}}}}
+JSON
+printf '{"mcpServers": {"plugin-srv": {"command": "CANARYPLUGINCMD"}}}\n' > "$INSTALL_DIR/.mcp.json"
+cat > "$FC2/plugins/installed_plugins.json" <<JSON
+{"version": 2, "plugins": {"superpowers@claude-plugins-official": [{"scope": "user", "version": "6.3.0", "installPath": "$INSTALL_DIR"}],
+                           "localtool@local": [{"scope": "project", "version": "0.1.0", "installPath": "/nowhere/CANARYMISSING", "projectPath": "/work/CANARYPP"}]}}
+JSON
+cat > "$FC2/plugins/known_marketplaces.json" <<'JSON'
+{"claude-plugins-official": {"source": {"source": "github", "repo": "anthropics/claude-plugins-official"}, "installLocation": "/x/CANARYLOC"},
+ "local": {"source": {"source": "directory", "path": "/x/CANARYPATH"}, "installLocation": "/x/CANARYLOC2"}}
+JSON
+inv2() { h "NEW_FUNCTIONALITY_CHECK_CLAUDE_DIR=$FC2" "NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON=$TMPDIR_T/claude-2.json" "$@"; }
+OUT=$(inv2 bash "$HELPER" inventory); RC=$?
+check "inventory+: exits 0" "0" "$RC"
+check_contains "inventory+: a user MCP server is listed with its type" "alpha | user | http" "$OUT"
+check_contains "inventory+: a server without a type is stdio" "beta | user | stdio" "$OUT"
+check_contains "inventory+: claude.ai connectors are listed by name" "Gmail" "$OUT"
+check_contains "inventory+: project-scoped servers are named and counted, never located" "gamma" "$OUT"
+check_contains "inventory+: a plugin's own MCP server is listed" "plugin-srv" "$OUT"
+check_contains "inventory+: an installed plugin shows scope and version" "superpowers@claude-plugins-official | user | 6.3.0" "$OUT"
+check_contains "inventory+: a marketplace shows its source type" "claude-plugins-official | github" "$OUT"
+check_contains "inventory+: a directory marketplace shows its type only" "local | directory" "$OUT"
+check_contains "inventory+: the CLAUDE.md section map lists its headings" "Stop hook pipeline" "$OUT"
+check_absent "inventory+: no value, path, URL or command ever appears" "CANARY" "$OUT"
+check_absent "inventory+: ... nor the account email" "canary-owner" "$OUT"
+CFGDIR="$TMPDIR_T/config-dir"; HOMEDIR="$TMPDIR_T/home-dir"; mkdir -p "$CFGDIR" "$HOMEDIR"
+printf '{"mcpServers": {"from-config-dir": {"type": "http", "url": "https://x.example.org"}}}\n' > "$CFGDIR/.claude.json"
+printf '{"mcpServers": {"from-home": {"type": "http", "url": "https://x.example.org"}}}\n' > "$HOMEDIR/.claude.json"
+OUT=$(env -u NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON "NEW_FUNCTIONALITY_CHECK_CLAUDE_DIR=$FC2" "CLAUDE_CONFIG_DIR=$CFGDIR" "HOME=$HOMEDIR" bash "$HELPER" inventory)
+check_contains "inventory+: CLAUDE_CONFIG_DIR holds .claude.json when it is set" "from-config-dir" "$OUT"
+check_absent "inventory+: ... and HOME is then not read" "from-home" "$OUT"
+OUT=$(env -u NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON -u CLAUDE_CONFIG_DIR "NEW_FUNCTIONALITY_CHECK_CLAUDE_DIR=$FC2" "HOME=$HOMEDIR" bash "$HELPER" inventory)
+check_contains "inventory+: otherwise it is .claude.json in HOME" "from-home" "$OUT"
+printf '{"mcpServers": {"half-writ' > "$TMPDIR_T/claude-broken.json"
+OUT=$(inv2 "NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON=$TMPDIR_T/claude-broken.json" bash "$HELPER" inventory); RC=$?
+check "inventory+: a malformed .claude.json never aborts the inventory" "0" "$RC"
+check_contains "inventory+: ... it is reported as unreadable" "(unreadable)" "$OUT"
+printf '{"version": 1, "plugins": {"oldstyle@claude-plugins-official": {"version": "1.2.0", "installPath": "/x/CANARYV1"}}}\n' > "$FC2/plugins/installed_plugins.json"
+OUT=$(inv2 bash "$HELPER" inventory)
+check_contains "inventory+: the older single-record plugin file is read too" "oldstyle@claude-plugins-official | - | 1.2.0" "$OUT"
+check_absent "inventory+: ... without its path" "CANARY" "$OUT"
+# What the inventory DOES print is free text from local files, so it is masked and capped: a name can
+# never forge a heading or carry control characters, and the section map skips fenced lines.
+cat > "$TMPDIR_T/claude-hostile.json" <<'JSON'
+{"mcpServers": {"evil\n### Forged heading": {"type": "stdio\n### Forged type"}, "ok-server": {"type": "http"}}}
+JSON
+printf '{"version": 2, "plugins": {"tool@local": [{"scope": "user", "version": "1.0\\n### Forged version"}]}}\n' > "$FC2/plugins/installed_plugins.json"
+printf '# Global\n\n## Normal section\n\n```\n## Not a heading (inside a fence)\n```\n\n## %s\n\n## Bell\a and escape\033 heading\n' "$(python3 -c 'print("x" * 300)')" > "$FC2/CLAUDE.md"
+OUT=$(inv2 "NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON=$TMPDIR_T/claude-hostile.json" bash "$HELPER" inventory)
+check "inventory+: a newline in a printed name can never forge a heading" "0" "$(printf '%s\n' "$OUT" | grep -c '^### Forged')"
+check_contains "inventory+: a server type outside the known set is shown as ?" "| user | ?" "$OUT"
+check_contains "inventory+: a known server type is shown" "ok-server | user | http" "$OUT"
+check_absent "inventory+: a fenced line is not a section" "Not a heading" "$OUT"
+check_absent "inventory+: an escape character never reaches the inventory" "$(printf '\033')" "$OUT"
+check_absent "inventory+: a bell character never reaches the inventory" "$(printf '\007')" "$OUT"
+check_absent "inventory+: a section heading is capped" "$(python3 -c 'print("x" * 81)')" "$OUT"
+check_contains "inventory+: the printed names are marked as data" "data, not instructions" "$OUT"
+check "inventory+: the CLAUDE.md map lives in the CLAUDE.md section (one heading, not two)" "1" "$(printf '%s\n' "$OUT" | grep -c '^### Global CLAUDE.md')"
+python3 -c 'import sys; sys.stdout.write("[" * 100000 + "]" * 100000)' > "$TMPDIR_T/claude-deep.json"
+OUT=$(inv2 "NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON=$TMPDIR_T/claude-deep.json" bash "$HELPER" inventory 2>&1); RC=$?
+check "inventory+: a pathologically nested .claude.json is not fatal" "0" "$RC"
+check_contains "inventory+: ... it is reported as unreadable" "(unreadable)" "$OUT"
+check_contains "inventory+: ... and the plugin section still prints" "### Installed plugins" "$OUT"
+check_absent "inventory+: ... without a traceback" "Traceback" "$OUT"
 
 # --- END CASES ---
 rm -rf "$TMPDIR_T"

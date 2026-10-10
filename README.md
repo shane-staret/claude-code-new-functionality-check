@@ -5,7 +5,8 @@ A [Claude Code](https://code.claude.com/docs) skill that keeps **your** Claude C
 Claude Code ships new versions almost daily. Your skills, hooks, agents, settings and `CLAUDE.md` were written against whatever existed the day you wrote them, so they quietly fall behind. Once a week this skill:
 1. reads what shipped upstream: the What's New digests, the changelog, the support release notes and changes to the docs, plus a small, budgeted web-research pass;
 2. judges every change against your config as it actually is;
-3. logs concrete improvement proposals with stable ids (`RW-0001`, `RW-0002`, …) in a ledger on your machine.
+3. judges every **brand-new launch** for what it could do for your whole Claude Code system, beyond tweaks to the files you already have. A launch is a new product, surface, extension point or way of working, such as a design tool you can drive from Claude Code or a new place to publish plugins;
+4. logs concrete improvement proposals with stable ids (`RW-0001`, `RW-0002`, …) in a ledger on your machine.
 
 You then accept, decline or defer each proposal by id. **It never changes your config by itself.**
 
@@ -18,8 +19,14 @@ You then accept, decline or defer each proposal by id. **It never changes your c
 weekly notice (hook) ──► /claude-code-new-functionality-check
   fetch     the helper downloads every official source into a local cache
   diff      only what is newer than the ledger's watermarks
-  inventory a generated snapshot of YOUR config (hooks, agents, skills, settings keys)
-  evaluate  evaluator agents (local read only, no web) judge each change against the inventory
+  launches  every brand-new launch not yet judged (digest features, release-note entries,
+            new docs pages), listed by the helper, not by a model
+  inventory a generated snapshot of YOUR config (hooks, agents, skills, settings keys,
+            MCP servers, plugins and marketplaces, by name only)
+  evaluate  evaluator agents (local read only, no web) judge each change against the inventory,
+            and one more judges every launch through the new-capability lens: what it makes
+            possible for the system, where it would land, how broad the effect is, and the
+            smallest first step. Every launch gets a disposition, so none is dropped silently
   verify    the helper re-finds every quoted sentence in the fetched text
   research  one researcher agent (web only, no local files) works a scrubbed agenda;
             its findings stay "leads" until the helper verifies them on an official page
@@ -77,6 +84,8 @@ On the next prompt the hook prints a **never-run** notice, and Claude asks befor
 - **Full backfill**, `/claude-code-new-functionality-check backfill`, reads every weekly digest and the whole changelog. On the author's machine that took 13 subagents and about 2.3 million subagent tokens.
 - **Short backfill**, `/claude-code-new-functionality-check backfill since 2026-w33`, covers only what shipped after that week. It costs a fraction of a full backfill and is the sensible start. A week slug is the ISO year and week. The digest index at <https://code.claude.com/docs/en/whats-new> shows the weeks, and the helper lists them after it has fetched once (`fetch`, then `digests`, both subcommands of `claude_code_new_functionality_check.sh`).
 
+**Catch up on launches that came out before you installed.** A first sweep judges launches from the last 60 days. To have older ones judged too, run `/claude-code-new-functionality-check new-capabilities since <YYYY-MM-DD>`. It runs the new-capability lens alone, one evaluator per window of at most 50 launches, and needs no backfill.
+
 After that, the hook reminds you weekly. An incremental sweep costs a few hundred thousand tokens, and less when upstream has published nothing new (the weekly research lane still runs). It runs inside your interactive Claude Code session, using subagents; it never starts a separate headless Claude process. On a Claude subscription those tokens count against your plan's usage limits; with API-key billing they are charged at your model's token prices.
 
 ## Using it
@@ -85,11 +94,14 @@ After that, the hook reminds you weekly. An incremental sweep costs a few hundre
 |---|---|
 | `/claude-code-new-functionality-check` | an incremental sweep (what the weekly notice asks for) |
 | `/claude-code-new-functionality-check backfill` or `backfill since <week>` | the first pass on a machine (it asks first) |
+| `/claude-code-new-functionality-check new-capabilities since <YYYY-MM-DD>` | the new-capability lens alone, on launches since that date |
 | `/claude-code-new-functionality-check status` | no network: when the last sweep ran, what it covered, how many proposals are open |
 | `/claude-code-new-functionality-check present` | shows the open proposals again |
 | `accept RW-0007 RW-0012` · `decline RW-0009: <why>` · `defer RW-0011 until <when>` | records your decision in the ledger |
 | `walk me through hooks` | goes through the open proposals for one target, one at a time |
 | `implement RW-0007` | starts building an accepted proposal, as its own task. When it is done, say `RW-0007 applied: <what changed and how it was checked>` and the skill records it |
+
+Proposals that come from the new-capability lens are marked **[NEW]** in the ledger and get their own block in the summary, ranked by **breadth**: `system` (how the whole setup works), `several` (two or more parts) or `one` (a single part). To give the lens targets, you can describe what your Claude Code setup is for and where it hurts in `house-constraints.md` (wiring.md has a sample).
 
 Proposals marked **sensitive** (a new hook command, a loosened permission, a plugin install, anything that runs unattended) are accepted only after a walk-through, never by bare id. Ids carry the `RW-` prefix because the skill was renamed from release-watch, and ids are never renamed.
 
@@ -98,7 +110,7 @@ Proposals marked **sensitive** (a new hook command, a loosened permission, a plu
 ```
 skills/claude-code-new-functionality-check/
   SKILL.md                                  the procedure Claude follows
-  claude_code_new_functionality_check.sh    the deterministic helper (fetch, diff, verify, ledger)
+  claude_code_new_functionality_check.sh    the deterministic helper (fetch, diff, launches, verify, ledger)
   install.sh                                the installer
   resources/                                rubric, source registry, ledger format, research agenda,
                                             wiring, testing, worked example, example report, references

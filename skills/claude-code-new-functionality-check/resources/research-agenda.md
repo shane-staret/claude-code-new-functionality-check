@@ -6,8 +6,9 @@ How the main session writes the agenda a `claude-code-new-functionality-check-re
 
 | Lane | Weekly sweep | Backfill |
 |---|---|---|
-| **Official long-form** — Anthropic engineering blog and Claude blog (Claude Code category): posts newer than the covered date | always | one researcher |
+| **Official long-form** — Anthropic engineering blog, Anthropic news and Claude product announcements, and the Claude blog (Claude Code category): posts newer than the covered date. A product launched only there reaches the new-capability lens through this lane, after `verify-lead` | always | one researcher |
 | **Feature-driven** — for the most consequential `feature_key`s this sweep: real-world usage, pitfalls, migration notes | up to 3 questions | folded into each themed researcher |
+| **New capabilities** — for the launches the lens marked `new-capability`: how teams use them with Claude Code, limits, plan availability, cost | up to 2 questions | one pass in a catch-up |
 | **Rotating theme** — ONE theme per sweep, chosen by ISO week number modulo 8 (`date +%V`), so every theme is revisited every two months without any bookkeeping | 1 theme | all 8, split across three researchers |
 | **Ecosystem** — releases of installed plugins (`sources.md`), new official-marketplace plugins named by `watch-diff` | when `watch-diff` or a plugin release shows something | one pass |
 

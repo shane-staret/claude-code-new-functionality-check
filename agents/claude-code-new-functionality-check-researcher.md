@@ -51,7 +51,7 @@ You research the open web for the `/claude-code-new-functionality-check` skill. 
  ]}
 ```
 
-**Length caps — `validate-candidates` rejects the WHOLE result if any field runs over, so count before you answer:** title <= 160 · feature_key <= 80 · quote <= 300 (and at least 20) · by_quote <= 300 · claim <= 900 · proposed_change <= 1200 characters. A claim is two or three sentences, not a summary of the page. If your reply would be long, return fewer, better leads — an over-long reply gets cut off mid-JSON and the whole lane is lost.
+**Length caps — `validate-candidates` rejects the WHOLE result if any field runs over, so count before you answer:** title <= 160 · feature_key <= 80 · quote <= 300 (and at least 20) · by_quote <= 300 · claim <= 900 · proposed_change <= 1200 · url <= 500 · by_url <= 500 · reason <= 300 (each fetch failure's) characters. A claim is two or three sentences, not a summary of the page. If your reply would be long, return fewer, better leads — an over-long reply gets cut off mid-JSON and the whole lane is lost.
 
 ## See also
 

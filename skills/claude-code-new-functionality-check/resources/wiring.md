@@ -73,7 +73,7 @@ These live beside the ledger, never in the skill folder, so updating the skill n
 
 | File | Contents | Read by |
 |---|---|---|
-| `house-constraints.md` | your config's own rules that a proposal must not break ("no hook starts a headless session", "deny rules stay as they are"), and facts that change a judgment (how large your CLAUDE.md is, how many machines share the config) | the evaluator, every run; never the researcher |
+| `house-constraints.md` | your config's own rules that a proposal must not break ("no hook starts a headless session", "deny rules stay as they are"), facts that change a judgment (how large your CLAUDE.md is, how many machines share the config), and optionally what your Claude Code system is for and where it hurts, which gives the new-capability lens its targets | the evaluator, every run; never the researcher |
 | `tracked-issues.md` | upstream issues your config works around, in the table shape of `resources/tracked-issues.md` | the helper (`tracked-issues`, `issue-status`, `issue-evidence`) |
 | `backup.conf` | one line, `BACKUP_DIR=<a folder that leaves the machine>` | the helper's `backup`, at the end of each sweep |
 
@@ -89,7 +89,14 @@ Without `house-constraints.md`, the evaluator uses the general constraints in `r
 | Hooks must stay fast: under 50 ms per prompt | they run on every prompt on every machine |
 
 Facts: CLAUDE.md is about 40 KB; three machines share this config; one of them is the sweeper.
+
+## What this system is for, and where it hurts
+
+- It reviews and tests every change at the end of a turn, and keeps three machines on one config.
+- Slow today: reading long review reports in the terminal; repeating the same setup on each machine.
 ```
+
+The last section is optional. Write it about the Claude Code system itself (its jobs, its friction), not about the projects it works on: the new-capability lens judges launches for the system.
 
 ## An optional CLAUDE.md rule
 
@@ -113,6 +120,9 @@ Set these in `settings.json` under `env`, and only when a default is wrong for y
 | `CLAUDE_NEW_FUNCTIONALITY_CHECK_RENOTICE_SECS` | `86400` | the minimum gap between notices, so a deferred sweep does not nag on every prompt |
 | `CLAUDE_NEW_FUNCTIONALITY_CHECK_QUIET_DIRS` | none | colon-separated folders where a due notice stays silent until the sweep is twice overdue (a client-work tree, say) |
 | `CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR` | `~/.claude/claude-code-new-functionality-check` | the ledger folder |
+| `NEW_FUNCTIONALITY_CHECK_CLAUDE_JSON` | `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json` | where the inventory reads MCP server names (names only, never a value) |
+| `NEW_FUNCTIONALITY_CHECK_LAUNCH_LOOKBACK_DAYS` | `60` | how many days a weekly `launches` listing covers; an older launch is reached only by a catch-up (`new-capabilities since <date>`) |
+| `NEW_FUNCTIONALITY_CHECK_LAUNCH_SLICE_MAX` | `50` | the most launches one slice may hold (one evaluator dispatch). A catch-up window over it is refused, so split it. A weekly listing over it stops with exit 3, and the message offers a catch-up or `launches --rebaseline-docs` |
 
 **A config folder other than `~/.claude` (`CLAUDE_CONFIG_DIR`).** `install.sh` copies into it, but the scripts' defaults and the skill's commands say `~/.claude`. To use it anyway:
 - set `CLAUDE_NEW_FUNCTIONALITY_CHECK_DIR`, `NEW_FUNCTIONALITY_CHECK_CLAUDE_DIR` (the config the inventory describes), `NEW_FUNCTIONALITY_CHECK_CACHE_DIR` and `NEW_FUNCTIONALITY_CHECK_STATE_FILE` to paths in your folder;
@@ -123,7 +133,7 @@ Set these in `settings.json` under `env`, and only when a default is wrong for y
 
 | Path | Holds | Safe to clear? |
 |---|---|---|
-| `~/.claude/claude-code-new-functionality-check/` | the ledger: proposals and your decisions, coverage watermarks, the run log, `snapshots/` (watched-page baselines) and `archive/` (same-disk copies taken before each write) | no: it is the record of your decisions |
+| `~/.claude/claude-code-new-functionality-check/` | the ledger: proposals and your decisions, coverage watermarks, the run log, `snapshots/` (watched-page baselines, and `launches-seen.txt`, the launches already judged) and `archive/` (same-disk copies taken before each write) | no: it is the record of your decisions |
 | `~/.claude/tmp/claude-code-new-functionality-check/cache/` | fetched pages, slices, the generated inventory, saved agent replies, the `verify-lead` page cache | yes; the next `fetch` refills it |
 | `~/.claude/tmp/claude-code-new-functionality-check-state.json` | when the last sweep finished and what it covered | yes; the machine then counts as due (never-run is decided by the ledger, not by this file) |
 
