@@ -148,7 +148,7 @@ check "opt-out leaves state untouched" "$BEFORE" "$(cat "$STATE")"
 # 10. Each of the six headless guards is a full no-op.
 for G in CLAUDE_CODE_REVIEW_RECURSION_GUARD CLAUDE_RUN_TESTS_RECURSION_GUARD \
          CLAUDE_PROJECT_ORG_RECURSION_GUARD CLAUDE_CONFLICT_DETECT_RECURSION_GUARD \
-         CLAUDE_AUTO_COMMIT_RECURSION_GUARD CLAUDE_DEEP_EVAL_RECURSION_GUARD; do
+         CLAUDE_AUTO_COMMIT_RECURSION_GUARD CLAUDE_HEADLESS_RUN_GUARD; do
     OUT=$(run_hook "$G=1" bash "$HOOK")
     check "headless guard $G is silent" "" "$OUT"
 done

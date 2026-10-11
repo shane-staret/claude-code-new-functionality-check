@@ -301,7 +301,7 @@ if [ -n "${CLAUDE_CODE_REVIEW_RECURSION_GUARD:-}" ] || \
    [ -n "${CLAUDE_PROJECT_ORG_RECURSION_GUARD:-}" ] || \
    [ -n "${CLAUDE_CONFLICT_DETECT_RECURSION_GUARD:-}" ] || \
    [ -n "${CLAUDE_AUTO_COMMIT_RECURSION_GUARD:-}" ] || \
-   [ -n "${CLAUDE_DEEP_EVAL_RECURSION_GUARD:-}" ]; then
+   [ -n "${CLAUDE_HEADLESS_RUN_GUARD:-}" ]; then
     exit 0
 fi
 

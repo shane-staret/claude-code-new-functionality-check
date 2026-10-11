@@ -1,0 +1,11 @@
+# package.manifest: the files this package ships, one path per line, relative to the
+# Claude Code config folder. A path ending in / is a whole folder. install.sh installs
+# exactly these files. Blank lines and lines starting with # are ignored.
+skills/claude-code-new-functionality-check/
+agents/claude-code-new-functionality-check-evaluator.md
+agents/claude-code-new-functionality-check-researcher.md
+hooks/claude-code-new-functionality-check-reminder.sh
+hooks/tests/test-claude-code-new-functionality-check-helper.sh
+hooks/tests/test-claude-code-new-functionality-check-reminder.sh
+hooks/tests/test-claude-code-new-functionality-check-install.sh
+hooks/tests/test-claude-code-new-functionality-check-package.sh
